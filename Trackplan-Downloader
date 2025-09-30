@@ -1,0 +1,93 @@
+import os
+import requests
+from bs4 import BeautifulSoup
+import re
+
+# Helper to sanitize folder names
+def clean_filename(name):
+    return re.sub(r'[\\/*?:"<>|]', "_", name)
+
+# Get all subpage links from an index page
+def get_subpage_links(index_url):
+    subpages = []
+    try:
+        resp = requests.get(index_url)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            href = a['href']
+            # Filter only track plan subpages
+            if "/track-plan-database/" in href and href.count("/") > 5:
+                subpages.append(href)
+    except Exception as e:
+        print(f"Error fetching {index_url}: {e}")
+    return list(set(subpages))  # Remove duplicates
+
+# Scrape a single subpage
+def scrape_subpage(subpage_url):
+    try:
+        resp = requests.get(subpage_url)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Get title for folder name
+        h1 = soup.find("h1")
+        title = h1.text.strip() if h1 else "untitled"
+        folder_name = clean_filename(title)
+        folder_path = os.path.join("downloads", folder_name)
+        os.makedirs(folder_path, exist_ok=True)
+
+        # Save article text
+        article_text = ""
+        entry_content = soup.find("div", class_="entry-content")
+        if entry_content:
+            article_text = entry_content.get_text(separator="\n").strip()
+        with open(os.path.join(folder_path, "article.txt"), "w", encoding="utf-8") as f:
+            f.write(article_text)
+
+        # Find PDF link
+        pdf_link = None
+        for a in soup.find_all("a", href=True):
+            if a['href'].lower().endswith(".pdf"):
+                pdf_link = a['href']
+                break
+
+        if pdf_link:
+            pdf_resp = requests.get(pdf_link)
+            pdf_resp.raise_for_status()
+            pdf_filename = os.path.basename(pdf_link)
+            pdf_path = os.path.join(folder_path, pdf_filename)
+            with open(pdf_path, "wb") as f:
+                f.write(pdf_resp.content)
+            print(f"Downloaded PDF: {pdf_path}")
+        else:
+            print("No PDF found on this page.")
+
+    except Exception as e:
+        print(f"Error scraping {subpage_url}: {e}")
+
+# Main driver
+def main():
+    all_subpages = []
+
+    # Crawl all 46 index pages
+    for i in range(1, 47):
+        if i == 1:
+            index_url = "https://www.trains.com/mrr/how-to/track-plan-database/"
+        else:
+            index_url = f"https://www.trains.com/mrr/how-to/track-plan-database/?_section=how-to%2Ctrack-plan-database&_paged={i}"
+        print(f"Scraping index page {i}: {index_url}")
+        subpages = get_subpage_links(index_url)
+        all_subpages.extend(subpages)
+
+    # Remove duplicates
+    all_subpages = list(set(all_subpages))
+    print(f"Found {len(all_subpages)} subpages total.")
+
+    # Scrape each subpage
+    for idx, subpage_url in enumerate(all_subpages, start=1):
+        print(f"[{idx}/{len(all_subpages)}] {subpage_url}")
+        scrape_subpage(subpage_url)
+
+if __name__ == "__main__":
+    main()
