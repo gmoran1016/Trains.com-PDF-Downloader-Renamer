@@ -1,0 +1,70 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:     [ 'v*' ]          # also fires on version tags like v1.0.0
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:            # allows manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'   # 3.14 not yet on GH runners; app is compatible with 3.10+
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium PyQt5 requests beautifulsoup4 pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --windowed `
+            --name "TrainsDownloader" `
+            --collect-all PyQt5 `
+            --hidden-import selenium `
+            --hidden-import requests `
+            --hidden-import bs4 `
+            --hidden-import pickle `
+            trains_app.py
+
+      - name: Zip the output folder
+        run: |
+          Compress-Archive -Path dist\TrainsDownloader\* -DestinationPath TrainsDownloader-windows.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrainsDownloader-windows
+          path: TrainsDownloader-windows.zip
+          retention-days: 30
+
+  # Attach the zip to a GitHub Release automatically when a tag is pushed
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: TrainsDownloader-windows
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TrainsDownloader-windows.zip
+          generate_release_notes: true

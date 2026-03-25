@@ -3,33 +3,14 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.git
-.mypy_cache
-.pytest_cache
-.hypothesis
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
 
-# Virtual environments
-.env
-.venv
-env/
+# Virtual environment
+.venv/
 venv/
-ENV/
-env.bak/
-venv.bak/
+env/
 
 # IDE
 .vscode/
@@ -40,22 +21,25 @@ venv.bak/
 
 # OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
+ehthumbs.db
 
-# Project specific
-downloads-*/
-Trackplan-Downloader/
-scraper.log
+# Runtime data — generated at runtime, never commit
+session_cookies.json
 session_cookies.pkl
 download_progress.json
-cookies.json
+*.log
 
-# Temporary files
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# Downloaded magazines
+downloads/
+downloads-*/
+
+# Temp / partial downloads
 *.tmp
 *.crdownload
 *.download

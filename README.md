@@ -1,18 +1,25 @@
 # Trains.com Magazine Downloader
 
-A comprehensive PyQt5-based GUI application for downloading and organizing train magazines from trains.com. Supports multiple magazines including Model Railroader, Trains Magazine, Classic Toy Trains, Classic Trains, and Garden Railways.
+A rewritten, modern version of the downloader with a clean package architecture.
+
+This repository now contains a rewritten, modern Python package for downloading train magazines from trains.com.
+
+Key improvements in the new version:
+
+* **Playwright** replaces Selenium for more reliable, self‑contained browser automation
+* **PySide6** provides a lightweight, cross‑platform GUI front end
+* The code is organised as a proper package (`trains_downloader`) with both CLI and GUI entry points
+* Build and distribution managed with `pyproject.toml`; tests added via `pytest`
+
+Legacy single‑file scripts are still present under `src/` for historical reference but they simply delegate to the new implementation and are deprecated.
 
 ## Features
 
-- **Multi-Magazine Support**: Download from multiple train magazines in a single session
-- **Sequential Downloads**: Process multiple magazines one after another automatically
-- **Trackplan Downloads**: Download trackplans from Model Railroader (when available)
-- **File Organization**: Automatically rename and organize downloaded PDFs by year
-- **Multithreaded Downloads**: Concurrent downloads for faster processing
-- **Session Management**: Save and reuse login sessions
-- **Headless Operation**: Run browser in background for unattended operation
-- **Progress Tracking**: Real-time progress bars and detailed logging
-- **Test Mode**: Limited downloads for testing purposes
+- Download issues from all trains.com magazines (Model Railroader, Trains Magazine, Classic Toy Trains, Classic Trains, Garden Railways)
+- Simple GUI or command‑line interface
+- Manual login with cookie persistence for reuse
+- Optional headless mode for unattended runs
+- Test mode limits page scanning for quick experimentation
 
 ## Supported Magazines
 
@@ -54,16 +61,27 @@ pip install -r requirements.txt
 
 ### GUI Application (Recommended)
 
-Run the main GUI application:
+After installing dependencies (and running `playwright install` once to obtain browsers), start the modern GUI via the entrypoint:
+
 ```bash
-python src/gui_downloader.py
+train-gui
 ```
 
-1. Select one or more magazines to download
-2. Enter your trains.com credentials (optional, can login manually)
-3. Configure download settings
-4. Click "Start Download"
-5. Monitor progress in the log output
+A simple window lets you pick a magazine, set a download folder, optionally load a cookies file, and toggle headless or test mode.  Click **Start** to begin and watch progress in the log area.
+
+### Command Line
+
+The package provides a CLI wrapper:
+
+```bash
+train-cli --magazine "Model Railroader" --download-dir downloads-MRR --cookies session_cookies.json
+```
+
+Use `--help` for full options.  A `--test` flag limits pages for quick runs.
+
+### Legacy Scripts
+
+Old single-file scripts remain under `src/` (e.g. `Magazine-Downloader.py`) for reference but are no longer maintained.  New development should use the packaged `trains_downloader` modules instead.
 
 ### Command Line Scripts
 

@@ -1,179 +1,75 @@
 # Authentication Guide
 
-This guide explains how to use the login and cookie management features to access subscriber-only content on trains.com.
+This document describes the simplified authentication workflow used by the
+new `trains_downloader` package.  The CLI entrypoint is `train-cli`, and the
+PySide6 GUI (`train-gui`) uses the same underlying logic.
 
-## How Login Works
+## Overview
 
-**Manual Login (Simple & Reliable):**
-1. Script opens browser to https://www.trains.com/
-2. You click the login button and enter your credentials
-3. Script saves your session cookies
-4. Future runs use saved cookies - no login needed!
+The scraper requires a logged‑in trains.com session in order to access
+subscriber‑only archives.  Rather than storing credentials, the application
+saves the browser session cookies to a JSON file which can be re‑used on
+subsequent runs.  This method avoids exposing your username/password and is
+compatible with headless operation.
 
-This approach is **100% reliable** and only needed once.
+### Default cookies file
 
-## Quick Start
+By default the cookies are written to `session_cookies.json` in the current
+working directory.  Specify a different path with the `--cookies` flag or the
+corresponding GUI field.
 
-### First Time Setup (Do This Once)
-```bash
-python Magazine-Downloader.py --login --save-cookies
-```
+## First‑time login
 
-**What happens:**
-1. Browser window opens
-2. You see clear instructions in terminal
-3. You manually login in the browser
-4. Press Enter in terminal when done
-5. Cookies saved automatically!
-
-### All Future Runs (Super Easy)
-```bash
-python Magazine-Downloader.py --use-cookies
-```
-
-No login needed - uses your saved session!
-
-## Authentication Methods
-
-### Method 1: Manual Login with Cookie Save (Recommended)
-The most reliable way - only do this once:
+Run the CLI (no `--cookies` required) or launch the GUI, then sign in using
+your trains.com subscription account.  For example:
 
 ```bash
-python Magazine-Downloader.py --login --save-cookies
+train-cli --magazine "Model Railroader" --test
 ```
 
-This will:
-1. Prompt you for your username/email
-2. Prompt you for your password (hidden input)
-3. Attempt to login automatically
-4. Save cookies for future use
-5. If automatic login fails, allow you to login manually in the browser
+A browser window will open.  After you complete the login flow the scraper
+automatically detects the authenticated session and saves the cookies file.
 
-### Method 2: Login with Command-Line Credentials (Less Secure)
-Provide credentials via command line (not recommended as password is visible):
+## Subsequent runs
+
+Simply supply the cookies file and the scraper will reuse the session:
 
 ```bash
-python Magazine-Downloader.py --login --username "your@email.com" --password "yourpassword" --save-cookies
+train-cli --magazine "Model Railroader" --cookies session_cookies.json
 ```
 
-**Warning:** This method exposes your password in command history!
+If the cookies have expired you will be prompted to log in again; the file
+will then be updated.
 
-### Method 3: Use Saved Cookies (Best for Repeated Use)
-Once you've logged in and saved cookies, reuse them:
+## Headless / scheduled operation
+
+Cookies allow the scraper to run headlessly without user interaction:
 
 ```bash
-python Magazine-Downloader.py --use-cookies
+train-cli --magazine "Model Railroader" --cookies session_cookies.json --headless
 ```
 
-This will:
-1. Load saved cookies from `session_cookies.pkl`
-2. Verify you're still logged in
-3. Proceed with downloading
+Add `--test` when experimenting to limit the number of pages scanned.
 
-### Method 4: Custom Cookie File Location
-Specify a custom cookie file:
+## Using the GUI
 
-```bash
-python Magazine-Downloader.py --login --save-cookies --cookies-file "my_cookies.pkl"
-```
-
-Later, reuse those cookies:
-
-```bash
-python Magazine-Downloader.py --use-cookies --cookies-file "my_cookies.pkl"
-```
-
-## Common Usage Scenarios
-
-### First Time Setup
-1. Login and save cookies:
-   ```bash
-   python Magazine-Downloader.py --login --save-cookies
-   ```
-
-2. Enter your credentials when prompted
-
-3. Cookies are saved to `session_cookies.pkl`
-
-### Regular Downloads
-After first-time setup, just use saved cookies:
-
-```bash
-python Magazine-Downloader.py --use-cookies
-```
-
-### Cookie Expired? Re-login
-If cookies expire, login again:
-
-```bash
-python Magazine-Downloader.py --login --save-cookies
-```
-
-### Headless Mode with Authentication
-Run in background with saved cookies:
-
-```bash
-python Magazine-Downloader.py --use-cookies --headless
-```
-
-### Complete Example: First-Time Full Download
-```bash
-# Step 1: Login and save cookies
-python Magazine-Downloader.py --login --save-cookies --start-page 1 --end-page 10
-
-# Step 2: Continue with cookies (no re-login needed)
-python Magazine-Downloader.py --use-cookies --start-page 11 --end-page 20
-```
-
-## How It Works
-
-### Cookie Management
-- **Cookies are saved** to `session_cookies.pkl` (or custom file)
-- **Cookies persist** your login session between script runs
-- **Cookies expire** after some time (usually days/weeks)
-- **Re-login required** when cookies expire
-
-### Login Verification
-The script checks if you're logged in by:
-1. Looking for "log out" / "sign out" text on the page
-2. Checking if "log in" / "sign in" buttons are present
-
-### Automatic vs Manual Login
-1. **Automatic**: Script tries to find and fill login form automatically
-2. **Manual**: If automatic fails, browser stays open for you to login manually
-3. After manual login, press Enter to continue
+Start the GUI with `train-gui` and use the **Load cookies…** button to pick an
+existing JSON file.  Once logged in future sessions will automatically reuse
+that file.
 
 ## Troubleshooting
 
-### Login Fails Automatically
-If automatic login doesn't work:
-1. Browser window stays open
-2. Manually login on the website
-3. Press Enter in the terminal when done
-4. Script continues and saves cookies
+* **Login not detected** – make sure you actually completed the login page and
+  did not close the browser prematurely.  Run the command again without
+  `--headless` to observe the process.
+* **Cookies expire** – delete the JSON file and repeat the first‑time login
+  procedure.
+* **Multiple accounts** – maintain separate cookie files and specify the
+  appropriate `--cookies` argument or load the correct file in the GUI.
 
-### Cookies Not Working
-If saved cookies don't work:
-```bash
-# Delete old cookies and re-login
-rm session_cookies.pkl
-python Magazine-Downloader.py --login --save-cookies
-```
+Cookies contain your authenticated session and should be treated as
+sensitive; do not commit them to version control or share them with others.
 
-### Want to Use Different Account
-```bash
-# Use different cookie file for different accounts
-python Magazine-Downloader.py --login --save-cookies --cookies-file "account1.pkl"
-python Magazine-Downloader.py --login --save-cookies --cookies-file "account2.pkl"
-
-# Then use specific account
-python Magazine-Downloader.py --use-cookies --cookies-file "account1.pkl"
-```
-
-### Check All Authentication Options
-```bash
-python Magazine-Downloader.py --help
-```
 
 ## Security Notes
 
