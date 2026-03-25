@@ -31,16 +31,17 @@ jobs:
         run: |
           python -m PyInstaller `
             --noconfirm `
+            --onefile `
             --windowed `
             --name "TrainsDownloader" `
             --collect-all PyQt5 `
-            --hidden-import selenium `
+            --collect-all selenium `
             --hidden-import requests `
             --hidden-import bs4 `
             trains_app.py
 
       - name: Zip output
-        run: Compress-Archive -Path dist\TrainsDownloader\* -DestinationPath TrainsDownloader-windows.zip
+        run: Compress-Archive -Path dist\TrainsDownloader.exe -DestinationPath TrainsDownloader-windows.zip
 
       - name: Publish to GitHub Releases (rolling "latest")
         uses: softprops/action-gh-release@v2

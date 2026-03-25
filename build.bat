@@ -21,14 +21,14 @@ if exist dist   rmdir /s /q dist
 echo Building executable...
 %PYTHON% -m PyInstaller ^
     --noconfirm ^
+    --onefile ^
     --windowed ^
     --name "TrainsDownloader" ^
     --icon NONE ^
     --collect-all PyQt5 ^
-    --hidden-import selenium ^
+    --collect-all selenium ^
     --hidden-import requests ^
     --hidden-import bs4 ^
-    --hidden-import pickle ^
     trains_app.py
 
 if errorlevel 1 (
