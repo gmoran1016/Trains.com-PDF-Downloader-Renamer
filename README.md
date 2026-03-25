@@ -1,180 +1,118 @@
-# Trains.com Magazine Downloader
+# Trains.com Magazine Downloader & Organizer
 
-A rewritten, modern version of the downloader with a clean package architecture.
+An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
 
-This repository now contains a rewritten, modern Python package for downloading train magazines from trains.com.
+## Download
 
-Key improvements in the new version:
+Pre-built executables are available on the [Releases](../../releases/latest) page — no Python installation required.
 
-* **Playwright** replaces Selenium for more reliable, self‑contained browser automation
-* **PySide6** provides a lightweight, cross‑platform GUI front end
-* The code is organised as a proper package (`trains_downloader`) with both CLI and GUI entry points
-* Build and distribution managed with `pyproject.toml`; tests added via `pytest`
+| Platform | File |
+|----------|------|
+| Windows  | `TrainsDownloader-windows.zip` → extract → run `TrainsDownloader.exe` |
+| Linux    | `TrainsDownloader-linux.zip` → extract → `chmod +x TrainsDownloader` → run |
+| macOS    | `TrainsDownloader-macos.zip` → extract → run `TrainsDownloader` |
 
-Legacy single‑file scripts are still present under `src/` for historical reference but they simply delegate to the new implementation and are deprecated.
+> **Requirement:** Google Chrome must be installed. The matching ChromeDriver is downloaded automatically on first run.
 
-## Features
+> **macOS note:** Right-click the app and choose **Open** the first time to bypass Gatekeeper.
 
-- Download issues from all trains.com magazines (Model Railroader, Trains Magazine, Classic Toy Trains, Classic Trains, Garden Railways)
-- Simple GUI or command‑line interface
-- Manual login with cookie persistence for reuse
-- Optional headless mode for unattended runs
-- Test mode limits page scanning for quick experimentation
+---
 
 ## Supported Magazines
 
-- Model Railroader (MRR)
-- Trains Magazine (TRN)
-- Classic Toy Trains (CTT)
-- Classic Trains (CTR)
-- Garden Railways (GRW)
+| Magazine | Prefix |
+|----------|--------|
+| Model Railroader | MRR |
+| Trains Magazine | TRN |
+| Classic Toy Trains | CTT |
+| Classic Trains | CTR |
+| Garden Railways | GRW |
 
-## Requirements
+---
 
-- Python 3.8+
-- Google Chrome browser
-- Internet connection
+## Features
 
-## Installation
+- **GUI interface** — select magazines, set save location, and monitor progress
+- **All three download modes** handled automatically:
+  - Recent issues via direct PDF link
+  - Mid-era issues via the embedded flipbook reader
+  - Very old digitised-only issues skipped gracefully
+- **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
+- **Cookie-based authentication** — log in once and sessions are reused across runs
+- **Built-in PDF organizer** — renames and sorts PDFs into `YYYY/` subfolders with consistent naming (`MRR-01-January-2024.pdf`)
+- **Sort order** — choose newest-first or oldest-first
+- **Test mode** — scans only the first 3 archive pages for quick testing
+- **Headless mode** — hide the browser window (requires valid saved cookies)
 
-1. Clone the repository:
+---
+
+## Authentication
+
+A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json` and click **Start** — a Chrome window will open for you to log in manually. Credentials are never stored; only the session cookie is saved for reuse.
+
+---
+
+## PDF Naming & Organization
+
+Downloaded files are renamed and moved into year subfolders automatically:
+
+```
+TrainsMagazines/
+├── MRR/
+│   ├── 2024/
+│   │   ├── MRR-01-January-2024.pdf
+│   │   ├── MRR-02-February-2024.pdf
+│   │   └── ...
+│   └── 2025/
+├── TRN/
+├── CTT/
+├── CTR/
+└── GRW/
+```
+
+The **Organize** tab can also rename and sort any existing folder of PDFs independently of the downloader.
+
+---
+
+## Running from Source
+
+Requires Python 3.10+ and Google Chrome.
+
 ```bash
 git clone https://github.com/yourusername/trains-magazine-downloader.git
 cd trains-magazine-downloader
-```
-
-2. Create a virtual environment:
-```bash
 python -m venv .venv
-# On Windows:
+
+# Windows
 .venv\Scripts\activate
-# On macOS/Linux:
+# macOS / Linux
 source .venv/bin/activate
-```
 
-3. Install dependencies:
-```bash
 pip install -r requirements.txt
+python trains_app.py
 ```
 
-## Usage
-
-### GUI Application (Recommended)
-
-After installing dependencies (and running `playwright install` once to obtain browsers), start the modern GUI via the entrypoint:
+### Building the exe locally (Windows)
 
 ```bash
-train-gui
+build.bat
 ```
 
-A simple window lets you pick a magazine, set a download folder, optionally load a cookies file, and toggle headless or test mode.  Click **Start** to begin and watch progress in the log area.
+Output: `dist\TrainsDownloader.exe`
 
-### Command Line
+---
 
-The package provides a CLI wrapper:
-
-```bash
-train-cli --magazine "Model Railroader" --download-dir downloads-MRR --cookies session_cookies.json
-```
-
-Use `--help` for full options.  A `--test` flag limits pages for quick runs.
-
-### Legacy Scripts
-
-Old single-file scripts remain under `src/` (e.g. `Magazine-Downloader.py`) for reference but are no longer maintained.  New development should use the packaged `trains_downloader` modules instead.
-
-### Command Line Scripts
-
-Legacy command-line scripts are available in the `src/` directory:
-
-- `Magazine-Downloader.py`: Download magazines from command line
-- `Magazine-rename.py`: Organize and rename downloaded files
-
-## Configuration
-
-### Download Directories
-
-The application automatically creates organized download folders:
-
-- `downloads-MRR/`: Model Railroader magazines
-- `downloads-TRN/`: Trains Magazine
-- `downloads-CTT/`: Classic Toy Trains
-- `downloads-CTR/`: Classic Trains
-- `downloads-GRW/`: Garden Railways
-
-Each magazine folder contains:
-- `Organized/YYYY/`: Organized PDFs by year
-- `Trackplans/`: Trackplan downloads (Model Railroader only)
-
-### Authentication
-
-The application supports multiple authentication methods:
-
-1. **Automatic Login**: Enter username/password in the GUI
-2. **Manual Login**: Login manually in the browser window
-3. **Saved Sessions**: Reuse previous login sessions
-
-See `docs/AUTHENTICATION_GUIDE.md` for detailed authentication instructions.
-
-## File Organization
-
-Downloaded PDFs are automatically organized with consistent naming:
-
-- Format: `Magazine_YYYY_Month.pdf` (e.g., `MRR_2023_November.pdf`)
-- Organized by year in `Organized/YYYY/` folders
-- Duplicate handling with automatic numbering
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Login Problems**: Ensure you have an active trains.com subscription
-2. **Download Failures**: Check internet connection and browser compatibility
-3. **File Organization**: Ensure write permissions in download directories
-
-### Logs
-
-- Application logs: `scraper.log`
-- GUI logs: Available in the application interface
-- Debug information: Check console output when running scripts
-
-## Development
-
-### Project Structure
+## Project Structure
 
 ```
-trains-magazine-downloader/
-├── src/
-│   ├── gui_downloader.py      # Main GUI application
-│   ├── Magazine-Downloader.py # CLI magazine downloader
-│   ├── Magazine-rename.py     # File organization script
-│   └── Trackplan-Downloader   # Trackplan downloader script
-├── docs/
-│   └── AUTHENTICATION_GUIDE.md
-├── requirements.txt           # Python dependencies
-├── .gitignore                # Git ignore rules
-└── README.md                 # This file
+trains_app.py                  # entire application (GUI + downloader + organizer)
+requirements.txt               # pip dependencies
+build.bat                      # local Windows build script
+.github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push
 ```
 
-### Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+---
 
 ## Disclaimer
 
-This tool is for personal use only. Ensure you comply with trains.com terms of service and have appropriate subscriptions for accessing magazine content. The authors are not responsible for misuse of this software.
-
-## Support
-
-For issues and questions:
-1. Check the troubleshooting section
-2. Review existing GitHub issues
-3. Create a new issue with detailed information
+This tool is intended for personal use only. You must have an active trains.com subscription to access magazine content. Please comply with trains.com's terms of service.
