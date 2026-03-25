@@ -3,13 +3,13 @@ name: Build Windows EXE
 on:
   push:
     branches: [ main, master ]
-    tags:     [ 'v*' ]          # also fires on version tags like v1.0.0
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:            # allows manual trigger from GitHub UI
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create/update releases
 
 jobs:
-  build:
+  build-and-release:
     runs-on: windows-latest
 
     steps:
@@ -19,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'   # 3.14 not yet on GH runners; app is compatible with 3.10+
+          python-version: '3.13'
           cache: 'pip'
 
       - name: Install dependencies
@@ -37,34 +37,19 @@ jobs:
             --hidden-import selenium `
             --hidden-import requests `
             --hidden-import bs4 `
-            --hidden-import pickle `
             trains_app.py
 
-      - name: Zip the output folder
-        run: |
-          Compress-Archive -Path dist\TrainsDownloader\* -DestinationPath TrainsDownloader-windows.zip
+      - name: Zip output
+        run: Compress-Archive -Path dist\TrainsDownloader\* -DestinationPath TrainsDownloader-windows.zip
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: TrainsDownloader-windows
-          path: TrainsDownloader-windows.zip
-          retention-days: 30
-
-  # Attach the zip to a GitHub Release automatically when a tag is pushed
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: TrainsDownloader-windows
-
-      - name: Create GitHub Release
+      - name: Publish to GitHub Releases (rolling "latest")
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: latest
+          name: Latest Build
+          prerelease: true
           files: TrainsDownloader-windows.zip
-          generate_release_notes: true
+          body: |
+            Automatically built from the latest commit on `main`.
+            Download **TrainsDownloader-windows.zip**, extract it, and run `TrainsDownloader.exe`.
+            Chrome must be installed — ChromeDriver downloads automatically on first run.
