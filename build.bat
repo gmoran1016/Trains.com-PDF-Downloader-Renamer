@@ -9,9 +9,10 @@ echo ============================================================
 set PYTHON=.venv\Scripts\python.exe
 set PIP=.venv\Scripts\pip.exe
 
-:: Install / upgrade PyInstaller inside the venv
-echo Installing PyInstaller...
+:: Install / upgrade PyInstaller and all project dependencies inside the venv
+echo Installing dependencies...
 %PIP% install --quiet --upgrade pyinstaller
+%PIP% install --quiet -r requirements.txt
 
 :: Clean previous build artifacts
 if exist build  rmdir /s /q build
@@ -29,6 +30,7 @@ echo Building executable...
     --collect-all selenium ^
     --hidden-import requests ^
     --hidden-import bs4 ^
+    --collect-all pypdf ^
     trains_app.py
 
 if errorlevel 1 (

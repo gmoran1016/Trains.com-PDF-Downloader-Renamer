@@ -7,6 +7,7 @@ Requires: Python 3.10+, selenium>=4.6, PyQt5, requests, beautifulsoup4
 
 import sys
 import os
+import io
 import json
 import re
 import shutil
@@ -17,6 +18,13 @@ import pickle
 from calendar import month_name, month_abbr as _month_abbr
 from pathlib import Path
 from functools import wraps
+
+try:
+    import pypdf
+    from pypdf.generic import DecodedStreamObject, NameObject
+    _PYPDF_AVAILABLE = True
+except ImportError:
+    _PYPDF_AVAILABLE = False
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -163,7 +171,34 @@ def save_progress(progress: dict) -> None:
 _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
+MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
+APP_VERSION = "1.1.0"
 ALL_MONTHS = list(month_name)[1:]
+# Full magazine names keyed by the file prefix used throughout this tool
+PREFIX_TO_TITLE: dict[str, str] = {
+    "MRR": "Model Railroader",
+    "TRN": "Trains",
+    "CTT": "Classic Toy Trains",
+    "CTR": "Classic Trains",
+    "GRW": "Garden Railways",
+}
+# Expected issue months for non-monthly magazines.
+# Prefixes not listed here are assumed monthly (ALL_MONTHS).
+PREFIX_ISSUE_MONTHS: dict[str, list[str]] = {
+    "CTR": ["March", "June", "September", "December"],  # quarterly
+}
+
+# Non-standard abbreviations not covered by the 3-letter calendar set
+EXTRA_MONTH_ABBR: dict[str, tuple[str, int]] = {
+    "SEPT": ("September", 9),
+}
+# Quarter number → (representative month name, month number)
+QUARTER_TO_MONTH: dict[int, tuple[str, int]] = {
+    1: ("January",  1),
+    2: ("April",    4),
+    3: ("July",     7),
+    4: ("October", 10),
+}
 
 
 def _guess_prefix(filename: str) -> str:
@@ -189,6 +224,17 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
         return None
 
     prefix = hint_prefix or _guess_prefix(name)
+
+    # Pattern 0: MM-FullMonthName-YYYY (already-formatted files, e.g. MRR-01-January-1934)
+    m = re.search(r"(\d{1,2})[_\-]([A-Za-z]+)[_\-](\d{4})(?:\D|$)", name)
+    if m:
+        mnum_raw, mname_raw, year_str = int(m.group(1)), m.group(2).capitalize(), m.group(3)
+        if mname_raw in MONTH_NUM_FROM_NAME:
+            mnum = MONTH_NUM_FROM_NAME[mname_raw]
+            year = int(year_str)
+            if 1900 <= year <= 2099:
+                mname = month_name[mnum]
+                return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
     # Pattern 1: YYYY_MM or YYYY-MM
     m = re.search(r"(\d{4})[_\-](\d{1,2})(?:\D|$)", name)
@@ -219,7 +265,180 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
                 mnum = MONTHNUM_FROM_ABBR[abbr]
                 return f"{prefix}-{mnum}-{mname}-{year}", str(year), mname
 
+    # Pattern 3b: Non-standard 4-letter abbreviations (e.g. SEPT17)
+    m = re.search(r"([A-Za-z]{4})[_\-]?(\d{2,4})(?:\D|$)", name)
+    if m:
+        abbr = m.group(1).upper()
+        if abbr in EXTRA_MONTH_ABBR:
+            mname, mnum = EXTRA_MONTH_ABBR[abbr]
+            year = int(m.group(2))
+            if year < 100:
+                year += 2000
+            if 1900 <= year <= 2099:
+                return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
+
+    # Pattern 3c: Quarter notation (e.g. 1988Q2, 1989Q1)
+    m = re.search(r"(\d{4})[_\-]?[Qq]([1-4])(?:\D|$)", name)
+    if m:
+        year = int(m.group(1))
+        quarter = int(m.group(2))
+        if 1900 <= year <= 2099:
+            mname, mnum = QUARTER_TO_MONTH[quarter]
+            return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
+
+    # Pattern 3d: Year only — no month information (e.g. 1986TT.pdf)
+    m = re.search(r"(?:^|\D)(\d{4})(?:\D|$)", name)
+    if m:
+        year = int(m.group(1))
+        if 1900 <= year <= 2099:
+            return f"{prefix}-{year}", str(year), None
+
+    # Pattern 4: Extract date from PDF first-page text (fallback for unrecognized filenames)
+    result = _extract_date_from_pdf(filepath)
+    if result:
+        mnum, mname, year_str = result
+        return f"{prefix}-{mnum:02d}-{mname}-{year_str}", year_str, mname
+
     return None
+
+
+def _extract_date_from_pdf(filepath: str):
+    """
+    Read the first page of a PDF and search for a month+year date.
+    Returns (mnum, mname, year_str) or None.
+    Falls back silently if pypdf is not installed or the PDF has no text layer.
+    """
+    if not _PYPDF_AVAILABLE:
+        return None
+    try:
+        with open(filepath, "rb") as f:
+            reader = pypdf.PdfReader(f)
+            if not reader.pages:
+                return None
+            text = reader.pages[0].extract_text() or ""
+    except Exception:
+        return None
+
+    # Search for "FullMonthName YYYY" (month name before year)
+    for mnum in range(1, 13):
+        mname = month_name[mnum]
+        m = re.search(rf"\b{mname}\b[\s,]+(\d{{4}})\b", text, re.IGNORECASE)
+        if m:
+            year = int(m.group(1))
+            if 1900 <= year <= 2099:
+                return mnum, mname, str(year)
+
+    # Search for "YYYY FullMonthName" (year before month name)
+    for mnum in range(1, 13):
+        mname = month_name[mnum]
+        m = re.search(rf"\b(\d{{4}})\b[\s,]+{mname}\b", text, re.IGNORECASE)
+        if m:
+            year = int(m.group(1))
+            if 1900 <= year <= 2099:
+                return mnum, mname, str(year)
+
+    # Search for 3-letter abbreviation + year as a last resort
+    for abbr, mname in MONTH_FROM_ABBR.items():
+        mnum = int(MONTHNUM_FROM_ABBR[abbr])
+        m = re.search(rf"\b{abbr}\.?\s+(\d{{4}})\b", text, re.IGNORECASE)
+        if m:
+            year = int(m.group(1))
+            if 1900 <= year <= 2099:
+                return mnum, mname, str(year)
+
+    return None
+
+
+def _build_xmp(title: str, mname: str | None, year: str) -> bytes:
+    """Build a minimal XMP metadata packet for a magazine issue."""
+    mnum = MONTH_NUM_FROM_NAME.get(mname, 1) if mname else 1
+    date_str = f"{year}-{mnum:02d}-01"
+    return (
+        '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
+        '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
+        '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">\n'
+        '    <rdf:Description rdf:about=""\n'
+        '        xmlns:dc="http://purl.org/dc/elements/1.1/"\n'
+        '        xmlns:xmp="http://ns.adobe.com/xap/1.0/">\n'
+        '      <dc:title><rdf:Alt>'
+        f'<rdf:li xml:lang="x-default">{title}</rdf:li>'
+        '</rdf:Alt></dc:title>\n'
+        f'      <xmp:CreateDate>{date_str}T00:00:00</xmp:CreateDate>\n'
+        '    </rdf:Description>\n'
+        '  </rdf:RDF>\n'
+        '</x:xmpmeta>\n'
+        '<?xpacket end="w"?>'
+    ).encode("utf-8")
+
+
+def _stamp_pdf_metadata(path: str, mname: str | None, year: str, warn_fn=None) -> bool:
+    """
+    Write title, month/year into both the PDF info dictionary and XMP metadata.
+    Returns True if metadata was written, False if already present or on any error.
+    warn_fn, if provided, is called with a message string on failure.
+    """
+    if not _PYPDF_AVAILABLE:
+        return False
+    tmp = path + ".meta_tmp"
+    try:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        prefix = stem.split("-")[0].upper()
+        mag_name = PREFIX_TO_TITLE.get(prefix, prefix)
+        if mname:
+            mnum = MONTH_NUM_FROM_NAME.get(mname, 1)
+            title = f"{mag_name} - {mname}, {year}"
+            metadata = {
+                "/Title":        title,
+                "/Subject":      f"{mname} {year}",
+                "/Keywords":     f"{mname}, {year}",
+                "/CreationDate": f"D:{year}{mnum:02d}01000000",
+            }
+        else:
+            title = f"{mag_name} - {year}"
+            metadata = {
+                "/Title":        title,
+                "/Subject":      year,
+                "/Keywords":     year,
+                "/CreationDate": f"D:{year}0101000000",
+            }
+        # Read entire file into memory so pypdf never needs the file handle later
+        with open(path, "rb") as f:
+            data = f.read()
+        reader = pypdf.PdfReader(io.BytesIO(data))
+        if (reader.metadata or {}).get("/Title") == title:
+            return False  # already stamped with our title — skip rewrite
+        # clone_from (pypdf 3.1+) properly owns all objects so add_metadata
+        # reliably overrides the existing /Info dict.  Fall back to page-by-page
+        # copy on older builds; that also starts with a clean info object.
+        try:
+            writer = pypdf.PdfWriter(clone_from=reader)
+        except TypeError:
+            writer = pypdf.PdfWriter()
+            for page in reader.pages:
+                writer.add_page(page)
+        # Write PDF info dictionary (traditional metadata)
+        writer.add_metadata(metadata)
+        # Write XMP metadata (modern standard, read by Grimoire and similar apps)
+        xmp_stream = DecodedStreamObject()
+        xmp_stream.set_data(_build_xmp(title, mname, year))
+        xmp_stream[NameObject("/Type")] = NameObject("/Metadata")
+        xmp_stream[NameObject("/Subtype")] = NameObject("/XML")
+        writer._root_object[NameObject("/Metadata")] = writer._add_object(xmp_stream)
+        with open(tmp, "wb") as f:
+            writer.write(f)
+        os.replace(tmp, path)
+        return True
+    except Exception as e:
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        msg = f"  Warning: metadata update failed for {os.path.basename(path)}: {e}"
+        logger.warning(msg)
+        if warn_fn:
+            warn_fn(msg)
+        return False
 
 
 def _unique_path(base_path: str) -> str:
@@ -235,7 +454,7 @@ def _unique_path(base_path: str) -> str:
 def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None, log_fn=None):
     """
     Move and rename PDFs from source_dir into dest_dir/YYYY/ subfolders.
-    Returns (moved_count, skipped_count, missing_report_lines).
+    Returns (moved_count, already_correct_count, unrecognized_count, missing_report_lines).
     """
     def _log(msg):
         logger.info(msg)
@@ -243,7 +462,9 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
             log_fn(msg)
 
     issues_by_year: dict[str, set] = {}
-    moved = skipped = 0
+    observed_prefixes: set[str] = set()
+    moved = already_correct = unrecognized = metadata_stamped = 0
+    _diag_done = False  # log existing title of first file once for diagnostics
 
     for root, _, files in os.walk(source_dir):
         for fname in files:
@@ -252,23 +473,59 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
             fpath = os.path.join(root, fname)
             parsed = parse_pdf_filename(fpath, hint_prefix)
             if not parsed:
-                _log(f"  Skipping (unrecognized): {fname}")
-                skipped += 1
+                _log(f"  Skipping (unrecognized, no date found in filename or PDF content): {fname}")
+                unrecognized += 1
                 continue
             new_stem, year, mname = parsed
+            observed_prefixes.add(new_stem.split("-")[0].upper())
             year_dir = os.path.join(dest_dir, year)
+            expected_path = os.path.join(year_dir, new_stem + ".pdf")
+            fname_stem = os.path.splitext(fname)[0]
+            actual_dir  = os.path.normcase(os.path.abspath(root))
+            expected_dir = os.path.normcase(os.path.abspath(year_dir))
+            is_duplicate_variant = (
+                actual_dir == expected_dir
+                and re.fullmatch(re.escape(new_stem) + r"-\d+", fname_stem, re.IGNORECASE)
+            )
+            if not _diag_done:
+                try:
+                    import io as _io, pypdf as _pypdf
+                    with open(fpath, "rb") as _f:
+                        _existing_title = (_pypdf.PdfReader(_io.BytesIO(_f.read())).metadata or {}).get("/Title", "<not set>")
+                    _log(f"  [diag] existing /Title in {fname!r}: {_existing_title!r}")
+                except Exception as _e:
+                    _log(f"  [diag] could not read title from {fname!r}: {_e}")
+                _diag_done = True
+            if is_duplicate_variant or os.path.normcase(os.path.abspath(fpath)) == os.path.normcase(os.path.abspath(expected_path)):
+                if mname:
+                    issues_by_year.setdefault(year, set()).add(mname)
+                else:
+                    issues_by_year.setdefault(year, set())
+                if _stamp_pdf_metadata(fpath, mname, year, warn_fn=_log):
+                    _log(f"  Metadata updated: {fname}")
+                    metadata_stamped += 1
+                already_correct += 1
+                continue
             os.makedirs(year_dir, exist_ok=True)
-            dest_path = _unique_path(os.path.join(year_dir, new_stem + ".pdf"))
+            dest_path = _unique_path(expected_path)
             shutil.move(fpath, dest_path)
+            if _stamp_pdf_metadata(dest_path, mname, year, warn_fn=_log):
+                metadata_stamped += 1
             _log(f"  {fname}  →  {dest_path}")
-            issues_by_year.setdefault(year, set()).add(mname)
+            if mname:
+                issues_by_year.setdefault(year, set()).add(mname)
+            else:
+                issues_by_year.setdefault(year, set())
             moved += 1
 
+    # Determine expected months from hint_prefix, or from the single observed prefix
+    _pfx = hint_prefix or (next(iter(observed_prefixes)) if len(observed_prefixes) == 1 else None)
+    expected_months = PREFIX_ISSUE_MONTHS.get(_pfx, ALL_MONTHS) if _pfx else ALL_MONTHS
     report = []
     for year in sorted(issues_by_year):
-        missing = [m for m in ALL_MONTHS if m not in issues_by_year[year]]
+        missing = [m for m in expected_months if m not in issues_by_year[year]]
         report.append(f"{year}: {'complete' if not missing else 'missing ' + str(missing)}")
-    return moved, skipped, report
+    return moved, already_correct, unrecognized, metadata_stamped, report
 
 
 # ------------------------------------------------------------------------------
@@ -674,15 +931,18 @@ class MagazineDownloader:
         """
         parsed = parse_pdf_filename(src_path, hint_prefix)
         if parsed:
-            new_stem, year, _ = parsed
+            new_stem, year, mname = parsed
             year_dir = os.path.join(dest_dir, year)
             os.makedirs(year_dir, exist_ok=True)
             dest = _unique_path(os.path.join(year_dir, new_stem + ".pdf"))
         else:
+            mname = year = None
             os.makedirs(dest_dir, exist_ok=True)
             dest = _unique_path(os.path.join(dest_dir, os.path.basename(src_path)))
 
         shutil.move(src_path, dest)
+        if year:
+            _stamp_pdf_metadata(dest, mname, year)
         self._log(f"  → {dest}")
         return dest
 
@@ -842,7 +1102,7 @@ class DownloadWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Trains.com Magazine Downloader & Organizer")
+        self.setWindowTitle(f"Trains.com Magazine Downloader & Organizer v{APP_VERSION}")
         self.resize(920, 740)
         self.worker: DownloadWorker | None = None
         self._build_ui()
@@ -885,7 +1145,7 @@ class MainWindow(QMainWindow):
 
         # Cookie file
         cookie_box = QGroupBox("Authentication — session cookie file")
-        cookie_row = QHBoxLayout(cookie_box)
+        cookie_row = QHBoxLayout()
         cookie_row.addWidget(QLabel("File:"))
         self.cookie_edit = QLineEdit(DEFAULT_COOKIES_FILE)
         cookie_browse = QPushButton("Browse…")
@@ -1091,8 +1351,8 @@ class MainWindow(QMainWindow):
         self.org_log.clear()
         self.org_log.append(f"Organizing PDFs from: {src}")
         self.org_log.append(f"                  to: {dst}\n")
-        moved, skipped, report = organize_pdfs(src, dst, hint_prefix=hint, log_fn=self.org_log.append)
-        self.org_log.append(f"\n-- {moved} moved, {skipped} skipped --")
+        moved, already_correct, unrecognized, metadata_stamped, report = organize_pdfs(src, dst, hint_prefix=hint, log_fn=self.org_log.append)
+        self.org_log.append(f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --")
         for line in report:
             self.org_log.append(line)
 
