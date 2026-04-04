@@ -1,6 +1,6 @@
 # Trains.com Magazine Downloader & Organizer
 
-**v1.1.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
+**v1.2.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
 
 ## Download
 
@@ -42,6 +42,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 - **Built-in PDF organizer** — renames and sorts PDFs into `YYYY/` subfolders with consistent naming (`MRR-01-January-2024.pdf`)
 - **PDF metadata stamping** — writes correct Title, Subject, Keywords, and Creation Date into each PDF's info dictionary and XMP metadata
 - **Smart completeness report** — after organizing, lists missing issues per year using each magazine's actual publication schedule (monthly, quarterly, etc.)
+- **Download missing issues** — click "Download Missing Issues" after organizing to automatically fetch only the issues you don't have, using the same download engine
 - **Sort order** — choose newest-first or oldest-first
 - **Test mode** — scans only the first 3 archive pages for quick testing
 - **Headless mode** — hide the browser window (requires valid saved cookies)

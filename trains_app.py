@@ -172,7 +172,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 ALL_MONTHS = list(month_name)[1:]
 # Full magazine names keyed by the file prefix used throughout this tool
 PREFIX_TO_TITLE: dict[str, str] = {
@@ -198,6 +198,15 @@ QUARTER_TO_MONTH: dict[int, tuple[str, int]] = {
     2: ("April",    4),
     3: ("July",     7),
     4: ("October", 10),
+}
+# Season name → (representative month name, month number)
+# Used to parse URL slugs like "classic-trains-summer-2005"
+SEASON_TO_MONTH: dict[str, tuple[str, int]] = {
+    "SPRING": ("March",     3),
+    "SUMMER": ("June",      6),
+    "FALL":   ("September", 9),
+    "AUTUMN": ("September", 9),
+    "WINTER": ("December", 12),
 }
 
 
@@ -286,7 +295,16 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
             mname, mnum = QUARTER_TO_MONTH[quarter]
             return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
-    # Pattern 3d: Year only — no month information (e.g. 1986TT.pdf)
+    # Pattern 3d: Season name (e.g. summer-2005, spring2003)
+    m = re.search(r"(spring|summer|fall|autumn|winter)[_\-]?(\d{4})(?:\D|$)", name, re.IGNORECASE)
+    if m:
+        season_key = m.group(1).upper()
+        year = int(m.group(2))
+        if 1900 <= year <= 2099 and season_key in SEASON_TO_MONTH:
+            mname, mnum = SEASON_TO_MONTH[season_key]
+            return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
+
+    # Pattern 3e: Year only — no month information (e.g. CTR-1999.pdf)
     m = re.search(r"(?:^|\D)(\d{4})(?:\D|$)", name)
     if m:
         year = int(m.group(1))
@@ -948,6 +966,16 @@ class MagazineDownloader:
 
 
 # ------------------------------------------------------------------------------
+# Reverse-lookup: prefix → archive URL
+# ------------------------------------------------------------------------------
+def _archive_url_for_prefix(prefix: str) -> str | None:
+    for info in MAGAZINES.values():
+        if info["prefix"] == prefix:
+            return info["url"]
+    return None
+
+
+# ------------------------------------------------------------------------------
 # Worker thread
 # ------------------------------------------------------------------------------
 class WorkerSignals(QObject):
@@ -1089,6 +1117,149 @@ class DownloadWorker(QThread):
 
         except Exception as e:
             logger.exception("Worker error")
+            self.signals.error.emit(str(e))
+        finally:
+            if downloader:
+                downloader.close()
+            self.signals.finished.emit()
+
+
+class MissingIssuesWorker(QThread):
+    """
+    Downloads only the issues identified as missing by the organizer.
+    Crawls the archive for the given magazine, matches URLs against the
+    missing (year, month) pairs by parsing each URL slug, and downloads
+    only those that are needed.
+    """
+
+    def __init__(self, prefix: str, archive_url: str,
+                 missing_by_year: dict[str, list[str]],
+                 dest_dir: str, cookies_path: str | None, headless: bool):
+        super().__init__()
+        self.prefix          = prefix
+        self.archive_url     = archive_url
+        self.missing_by_year = missing_by_year   # {year: [month_names]}
+        self.dest_dir        = dest_dir
+        self.cookies_path    = cookies_path
+        self.headless        = headless
+        self.signals         = WorkerSignals()
+        self._stop           = False
+
+    def stop(self):
+        self._stop = True
+
+    def _log(self, msg: str):
+        logger.info(msg)
+        self.signals.log.emit(msg)
+
+    def run(self):
+        downloader = None
+        try:
+            # Build set of (year, month) targets
+            targets: set[tuple[str, str]] = {
+                (year, month)
+                for year, months in self.missing_by_year.items()
+                for month in months
+            }
+            if not targets:
+                self._log("No missing issues to download.")
+                return
+
+            self._log(f"Searching for {len(targets)} missing issue(s) in the archive…")
+
+            downloader = MagazineDownloader(
+                download_dir=self.dest_dir,
+                headless=self.headless,
+                log_fn=self.signals.log.emit,
+            )
+
+            # Authentication
+            logged_in = False
+            if self.cookies_path and os.path.exists(self.cookies_path):
+                cookies = load_cookies(self.cookies_path)
+                if cookies:
+                    downloader.add_cookies(cookies)
+                    logged_in = downloader.is_logged_in()
+                    if logged_in:
+                        self._log("Authenticated via saved cookies.")
+                    else:
+                        self._log("Saved cookies did not authenticate — need to log in manually.")
+
+            if not logged_in:
+                if self.headless:
+                    self.signals.error.emit(
+                        "Not logged in and headless mode is ON.\n"
+                        "Disable headless mode so you can log in via the browser window."
+                    )
+                    return
+                self._log("Please log in via the browser window (you have 5 minutes)…")
+                if not downloader.wait_for_manual_login(
+                    timeout=LOGIN_TIMEOUT,
+                    progress_fn=self.signals.status_msg.emit,
+                ):
+                    self.signals.error.emit("Login timed out. Please try again.")
+                    return
+                if self.cookies_path:
+                    downloader.save_cookies(self.cookies_path)
+                    self._log(f"Cookies saved to {self.cookies_path}")
+
+            # Collect all issue URLs from the archive
+            self._log(f"Scanning archive: {self.archive_url}")
+            links = downloader.collect_all_issue_links(self.archive_url, max_pages=110)
+            self._log(f"Found {len(links)} issues in archive. Matching against missing list…")
+
+            # Match each URL to a (year, month) by parsing its slug
+            matched: list[tuple[str, str, str]] = []  # (url, year, month)
+            for url in links:
+                slug = url.rstrip("/").split("/")[-1]
+                parsed = parse_pdf_filename(slug + ".pdf", hint_prefix=self.prefix)
+                if parsed:
+                    _, year, month = parsed
+                    if month and (year, month) in targets:
+                        matched.append((url, year, month))
+
+            if not matched:
+                self._log(
+                    "Could not match any missing issues to archive URLs.\n"
+                    "The URL slugs may not contain parseable month/year information."
+                )
+                return
+
+            self._log(f"Matched {len(matched)} issue(s) to download.")
+            self.signals.progress.emit(0, len(matched))
+
+            progress = load_progress()
+            for i, (url, year, month) in enumerate(matched, 1):
+                if self._stop:
+                    self._log("Stopped by user.")
+                    break
+
+                self._log(f"[{i}/{len(matched)}] {month} {year}  —  {url}")
+                year_dir = os.path.join(self.dest_dir, year)
+                os.makedirs(year_dir, exist_ok=True)
+
+                ok, result = downloader.download_issue(url, dest_dir=self.dest_dir,
+                                                       hint_prefix=self.prefix)
+                if ok:
+                    progress["completed"].append(url)
+                    save_progress(progress)
+                    self._log(f"  Downloaded: {result}")
+                elif "read-only" in result or "No PDF download available" in result:
+                    self._log(f"  [no pdf] {result}")
+                    progress["completed"].append(url)
+                    save_progress(progress)
+                else:
+                    self._log(f"  FAILED: {result}")
+
+                self.signals.progress.emit(i, len(matched))
+                if i < len(matched) and not self._stop:
+                    time.sleep(1 + random.uniform(0, 0.5))
+
+            if self.cookies_path:
+                downloader.save_cookies(self.cookies_path)
+
+        except Exception as e:
+            logger.exception("MissingIssuesWorker error")
             self.signals.error.emit(str(e))
         finally:
             if downloader:
@@ -1253,6 +1424,38 @@ class MainWindow(QMainWindow):
         run_btn.clicked.connect(self._run_organize)
         layout.addWidget(run_btn)
 
+        # -- Cookie / auth row (shared with missing-issues download) ----------
+        cookie_box = QGroupBox("Cookie file (required for downloading missing issues)")
+        cookie_row = QHBoxLayout(cookie_box)
+        self.org_cookie_edit = QLineEdit()
+        self.org_cookie_edit.setPlaceholderText("session_cookies.json")
+        org_cookie_browse = QPushButton("Browse…")
+        org_cookie_browse.setFixedWidth(80)
+        org_cookie_browse.clicked.connect(self._browse_org_cookies)
+        self.org_headless_cb = QCheckBox("Headless browser")
+        cookie_row.addWidget(self.org_cookie_edit)
+        cookie_row.addWidget(org_cookie_browse)
+        cookie_row.addWidget(self.org_headless_cb)
+        layout.addWidget(cookie_box)
+
+        # -- Download missing row ----------------------------------------------
+        missing_row = QHBoxLayout()
+        self.dl_missing_btn = QPushButton("⬇  Download Missing Issues")
+        self.dl_missing_btn.setFixedHeight(32)
+        self.dl_missing_btn.setEnabled(False)
+        self.dl_missing_btn.clicked.connect(self._start_missing_download)
+        self.dl_missing_stop_btn = QPushButton("■  Stop")
+        self.dl_missing_stop_btn.setFixedHeight(32)
+        self.dl_missing_stop_btn.setEnabled(False)
+        self.dl_missing_stop_btn.clicked.connect(self._stop_missing_download)
+        missing_row.addWidget(self.dl_missing_btn)
+        missing_row.addWidget(self.dl_missing_stop_btn)
+        layout.addLayout(missing_row)
+
+        self.org_progress = QProgressBar()
+        self.org_progress.setVisible(False)
+        layout.addWidget(self.org_progress)
+
         self.org_log = QTextEdit()
         self.org_log.setReadOnly(True)
         self.org_log.setFont(QFont("Consolas", 9))
@@ -1339,6 +1542,14 @@ class MainWindow(QMainWindow):
         self._dl_log("--- Done ---")
         self.status_label.setText("Done.")
 
+    def _browse_org_cookies(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select cookie file", "",
+            "Cookie files (*.json *.pkl *.pickle);;All files (*)"
+        )
+        if path:
+            self.org_cookie_edit.setText(path)
+
     def _run_organize(self):
         src = self.src_edit.text().strip()
         dst = self.dst_edit.text().strip()
@@ -1355,6 +1566,84 @@ class MainWindow(QMainWindow):
         self.org_log.append(f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --")
         for line in report:
             self.org_log.append(line)
+
+        # Parse missing issues from the report so the download button can use them
+        self._missing_by_year: dict[str, list[str]] = {}
+        for line in report:
+            m = re.match(r"(\d{4}): missing (\[.*\])", line)
+            if m:
+                try:
+                    import ast
+                    self._missing_by_year[m.group(1)] = ast.literal_eval(m.group(2))
+                except Exception:
+                    pass
+
+        # Determine the magazine prefix for the destination folder
+        self._org_prefix: str | None = hint
+        if not self._org_prefix:
+            # Try the last component of the dest path (e.g. .../CTR → CTR)
+            candidate = os.path.basename(os.path.normpath(dst)).upper()
+            if candidate in PREFIX_TO_TITLE:
+                self._org_prefix = candidate
+
+        has_missing = bool(self._missing_by_year) and self._org_prefix and \
+                      _archive_url_for_prefix(self._org_prefix) is not None
+        self.dl_missing_btn.setEnabled(has_missing)
+        if has_missing:
+            total = sum(len(v) for v in self._missing_by_year.values())
+            self.org_log.append(
+                f"\n{total} missing issue(s) found — click 'Download Missing Issues' to fetch them."
+            )
+
+    def _start_missing_download(self):
+        dst = self.dst_edit.text().strip()
+        if not dst or not self._org_prefix:
+            return
+        archive_url = _archive_url_for_prefix(self._org_prefix)
+        if not archive_url:
+            QMessageBox.warning(self, "Unknown magazine",
+                                f"No archive URL found for prefix '{self._org_prefix}'.")
+            return
+
+        cookies  = self.org_cookie_edit.text().strip() or "session_cookies.json"
+        headless = self.org_headless_cb.isChecked()
+
+        self.dl_missing_btn.setEnabled(False)
+        self.dl_missing_stop_btn.setEnabled(True)
+        self.org_progress.setVisible(True)
+        self.org_progress.setValue(0)
+
+        self._missing_worker = MissingIssuesWorker(
+            prefix=self._org_prefix,
+            archive_url=archive_url,
+            missing_by_year=self._missing_by_year,
+            dest_dir=dst,
+            cookies_path=cookies,
+            headless=headless,
+        )
+        self._missing_worker.signals.log.connect(self.org_log.append)
+        self._missing_worker.signals.progress.connect(self._update_org_progress)
+        self._missing_worker.signals.error.connect(
+            lambda msg: QMessageBox.critical(self, "Error", msg)
+        )
+        self._missing_worker.signals.finished.connect(self._on_missing_finished)
+        self._missing_worker.start()
+
+    def _stop_missing_download(self):
+        if hasattr(self, "_missing_worker") and self._missing_worker:
+            self._missing_worker.stop()
+            self.org_log.append("Stop requested…")
+        self.dl_missing_stop_btn.setEnabled(False)
+
+    def _update_org_progress(self, current: int, total: int):
+        if total > 0:
+            self.org_progress.setMaximum(total)
+            self.org_progress.setValue(current)
+
+    def _on_missing_finished(self):
+        self.dl_missing_btn.setEnabled(bool(self._missing_by_year))
+        self.dl_missing_stop_btn.setEnabled(False)
+        self.org_log.append("--- Download complete ---")
 
 
 # ------------------------------------------------------------------------------
