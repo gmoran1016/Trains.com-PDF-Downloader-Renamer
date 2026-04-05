@@ -15,6 +15,7 @@ import time
 import logging
 import random
 import pickle
+import datetime
 from calendar import month_name, month_abbr as _month_abbr
 from pathlib import Path
 from functools import wraps
@@ -86,11 +87,12 @@ MAGAZINES = {
 _NON_ISSUE_SLUGS = frozenset({
     "current-issue", "special-issues", "staff", "annual-index",
     "contributor-guidelines", "archive-access", "subscription-plans",
-    "subscriptions", "page",
+    "subscriptions", "page", "index",
 })
 
 DEFAULT_COOKIES_FILE = os.path.join(_BASE_DIR, "session_cookies.json")
-PROGRESS_FILE = os.path.join(_BASE_DIR, "download_progress.json")
+PROGRESS_FILE       = os.path.join(_BASE_DIR, "download_progress.json")
+SPECIAL_ISSUES_FILE = os.path.join(_BASE_DIR, "special_issues.json")
 DOWNLOAD_TIMEOUT = 120   # seconds to wait for a PDF download
 LOGIN_TIMEOUT = 300      # seconds to wait for manual login (5 min)
 
@@ -146,7 +148,7 @@ def load_cookies(path: str) -> list:
 def load_progress() -> dict:
     if os.path.exists(PROGRESS_FILE):
         try:
-            with open(PROGRESS_FILE, "r") as f:
+            with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             # ensure required keys
             data.setdefault("completed", [])
@@ -159,10 +161,29 @@ def load_progress() -> dict:
 
 def save_progress(progress: dict) -> None:
     try:
-        with open(PROGRESS_FILE, "w") as f:
+        with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
             json.dump(progress, f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save progress: {e}")
+
+
+def load_special_issues() -> set:
+    """Return the set of special-issue URLs already downloaded (survives cache clears)."""
+    if os.path.exists(SPECIAL_ISSUES_FILE):
+        try:
+            with open(SPECIAL_ISSUES_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+
+def save_special_issues(urls: set) -> None:
+    try:
+        with open(SPECIAL_ISSUES_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(urls), f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save special issues: {e}")
 
 
 # ------------------------------------------------------------------------------
@@ -172,7 +193,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 ALL_MONTHS = list(month_name)[1:]
 # Full magazine names keyed by the file prefix used throughout this tool
 PREFIX_TO_TITLE: dict[str, str] = {
@@ -241,7 +262,7 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
         if mname_raw in MONTH_NUM_FROM_NAME:
             mnum = MONTH_NUM_FROM_NAME[mname_raw]
             year = int(year_str)
-            if 1900 <= year <= 2099:
+            if 1800 <= year <= 2200:
                 mname = month_name[mnum]
                 return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
@@ -249,7 +270,7 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
     m = re.search(r"(\d{4})[_\-](\d{1,2})(?:\D|$)", name)
     if m:
         year, mnum = int(m.group(1)), int(m.group(2))
-        if 1900 <= year <= 2099 and 1 <= mnum <= 12:
+        if 1800 <= year <= 2200 and 1 <= mnum <= 12:
             mname = month_name[mnum]
             return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
@@ -257,7 +278,7 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
     m = re.search(r"(\d{4})(\d{2})(?:\D|$)", name)
     if m:
         year, mnum = int(m.group(1)), int(m.group(2))
-        if 1900 <= year <= 2099 and 1 <= mnum <= 12:
+        if 1800 <= year <= 2200 and 1 <= mnum <= 12:
             mname = month_name[mnum]
             return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
@@ -269,7 +290,7 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
             year = int(m.group(2))
             if year < 100:
                 year += 2000
-            if 1900 <= year <= 2099:
+            if 1800 <= year <= 2200:
                 mname = MONTH_FROM_ABBR[abbr]
                 mnum = MONTHNUM_FROM_ABBR[abbr]
                 return f"{prefix}-{mnum}-{mname}-{year}", str(year), mname
@@ -283,7 +304,7 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
             year = int(m.group(2))
             if year < 100:
                 year += 2000
-            if 1900 <= year <= 2099:
+            if 1800 <= year <= 2200:
                 return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
     # Pattern 3c: Quarter notation (e.g. 1988Q2, 1989Q1)
@@ -291,16 +312,25 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
     if m:
         year = int(m.group(1))
         quarter = int(m.group(2))
-        if 1900 <= year <= 2099:
+        if 1800 <= year <= 2200:
             mname, mnum = QUARTER_TO_MONTH[quarter]
             return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
-    # Pattern 3d: Season name (e.g. summer-2005, spring2003)
+    # Pattern 3d: Season name before year (e.g. summer-2005, spring2003)
     m = re.search(r"(spring|summer|fall|autumn|winter)[_\-]?(\d{4})(?:\D|$)", name, re.IGNORECASE)
     if m:
         season_key = m.group(1).upper()
         year = int(m.group(2))
-        if 1900 <= year <= 2099 and season_key in SEASON_TO_MONTH:
+        if 1800 <= year <= 2200 and season_key in SEASON_TO_MONTH:
+            mname, mnum = SEASON_TO_MONTH[season_key]
+            return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
+
+    # Pattern 3d-alt: Year before season (e.g. 2023-fall, 2005summer)
+    m = re.search(r"(\d{4})[_\-]?(spring|summer|fall|autumn|winter)(?:\W|$)", name, re.IGNORECASE)
+    if m:
+        year = int(m.group(1))
+        season_key = m.group(2).upper()
+        if 1800 <= year <= 2200 and season_key in SEASON_TO_MONTH:
             mname, mnum = SEASON_TO_MONTH[season_key]
             return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
 
@@ -308,7 +338,7 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
     m = re.search(r"(?:^|\D)(\d{4})(?:\D|$)", name)
     if m:
         year = int(m.group(1))
-        if 1900 <= year <= 2099:
+        if 1800 <= year <= 2200:
             return f"{prefix}-{year}", str(year), None
 
     # Pattern 4: Extract date from PDF first-page text (fallback for unrecognized filenames)
@@ -343,7 +373,7 @@ def _extract_date_from_pdf(filepath: str):
         m = re.search(rf"\b{mname}\b[\s,]+(\d{{4}})\b", text, re.IGNORECASE)
         if m:
             year = int(m.group(1))
-            if 1900 <= year <= 2099:
+            if 1800 <= year <= 2200:
                 return mnum, mname, str(year)
 
     # Search for "YYYY FullMonthName" (year before month name)
@@ -352,7 +382,7 @@ def _extract_date_from_pdf(filepath: str):
         m = re.search(rf"\b(\d{{4}})\b[\s,]+{mname}\b", text, re.IGNORECASE)
         if m:
             year = int(m.group(1))
-            if 1900 <= year <= 2099:
+            if 1800 <= year <= 2200:
                 return mnum, mname, str(year)
 
     # Search for 3-letter abbreviation + year as a last resort
@@ -361,16 +391,20 @@ def _extract_date_from_pdf(filepath: str):
         m = re.search(rf"\b{abbr}\.?\s+(\d{{4}})\b", text, re.IGNORECASE)
         if m:
             year = int(m.group(1))
-            if 1900 <= year <= 2099:
+            if 1800 <= year <= 2200:
                 return mnum, mname, str(year)
 
     return None
 
 
-def _build_xmp(title: str, mname: str | None, year: str) -> bytes:
+def _build_xmp(title: str, mname: str | None, year: str, author: str = "") -> bytes:
     """Build a minimal XMP metadata packet for a magazine issue."""
     mnum = MONTH_NUM_FROM_NAME.get(mname, 1) if mname else 1
     date_str = f"{year}-{mnum:02d}-01"
+    creator_xml = (
+        f'      <dc:creator><rdf:Seq><rdf:li>{author}</rdf:li></rdf:Seq></dc:creator>\n'
+        if author else ""
+    )
     return (
         '<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?>\n'
         '<x:xmpmeta xmlns:x="adobe:ns:meta/">\n'
@@ -381,6 +415,7 @@ def _build_xmp(title: str, mname: str | None, year: str) -> bytes:
         '      <dc:title><rdf:Alt>'
         f'<rdf:li xml:lang="x-default">{title}</rdf:li>'
         '</rdf:Alt></dc:title>\n'
+        f'{creator_xml}'
         f'      <xmp:CreateDate>{date_str}T00:00:00</xmp:CreateDate>\n'
         '    </rdf:Description>\n'
         '  </rdf:RDF>\n'
@@ -399,6 +434,12 @@ def _stamp_pdf_metadata(path: str, mname: str | None, year: str, warn_fn=None) -
         return False
     tmp = path + ".meta_tmp"
     try:
+        file_size = os.path.getsize(path)
+        if file_size > 50 * 1024 * 1024:  # warn for PDFs over 50 MB
+            logger.warning(
+                f"Large PDF ({file_size // (1024 * 1024)} MB): loading "
+                f"{os.path.basename(path)} into memory for metadata update"
+            )
         stem = os.path.splitext(os.path.basename(path))[0]
         prefix = stem.split("-")[0].upper()
         mag_name = PREFIX_TO_TITLE.get(prefix, prefix)
@@ -407,6 +448,7 @@ def _stamp_pdf_metadata(path: str, mname: str | None, year: str, warn_fn=None) -
             title = f"{mag_name} - {mname}, {year}"
             metadata = {
                 "/Title":        title,
+                "/Author":       mag_name,
                 "/Subject":      f"{mname} {year}",
                 "/Keywords":     f"{mname}, {year}",
                 "/CreationDate": f"D:{year}{mnum:02d}01000000",
@@ -415,6 +457,7 @@ def _stamp_pdf_metadata(path: str, mname: str | None, year: str, warn_fn=None) -
             title = f"{mag_name} - {year}"
             metadata = {
                 "/Title":        title,
+                "/Author":       mag_name,
                 "/Subject":      year,
                 "/Keywords":     year,
                 "/CreationDate": f"D:{year}0101000000",
@@ -423,8 +466,9 @@ def _stamp_pdf_metadata(path: str, mname: str | None, year: str, warn_fn=None) -
         with open(path, "rb") as f:
             data = f.read()
         reader = pypdf.PdfReader(io.BytesIO(data))
-        if (reader.metadata or {}).get("/Title") == title:
-            return False  # already stamped with our title — skip rewrite
+        existing = reader.metadata or {}
+        if existing.get("/Title") == title and existing.get("/Author") == mag_name:
+            return False  # already stamped with correct title and author — skip rewrite
         # clone_from (pypdf 3.1+) properly owns all objects so add_metadata
         # reliably overrides the existing /Info dict.  Fall back to page-by-page
         # copy on older builds; that also starts with a clean info object.
@@ -438,7 +482,7 @@ def _stamp_pdf_metadata(path: str, mname: str | None, year: str, warn_fn=None) -
         writer.add_metadata(metadata)
         # Write XMP metadata (modern standard, read by Grimoire and similar apps)
         xmp_stream = DecodedStreamObject()
-        xmp_stream.set_data(_build_xmp(title, mname, year))
+        xmp_stream.set_data(_build_xmp(title, mname, year, author=mag_name))
         xmp_stream[NameObject("/Type")] = NameObject("/Metadata")
         xmp_stream[NameObject("/Subtype")] = NameObject("/XML")
         writer._root_object[NameObject("/Metadata")] = writer._add_object(xmp_stream)
@@ -447,16 +491,18 @@ def _stamp_pdf_metadata(path: str, mname: str | None, year: str, warn_fn=None) -
         os.replace(tmp, path)
         return True
     except Exception as e:
-        if os.path.exists(tmp):
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
         msg = f"  Warning: metadata update failed for {os.path.basename(path)}: {e}"
         logger.warning(msg)
         if warn_fn:
             warn_fn(msg)
         return False
+    finally:
+        # Always remove the temp file if it was left behind by any error path
+        if os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError as _oe:
+                logger.warning(f"Could not remove temp metadata file {tmp}: {_oe}")
 
 
 def _unique_path(base_path: str) -> str:
@@ -469,79 +515,131 @@ def _unique_path(base_path: str) -> str:
     return f"{root}-{i}{ext}"
 
 
-def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None, log_fn=None):
+def _detect_issue_frequency(issues_by_year: dict) -> list | None:
+    """
+    Infer the expected issue months from the collected files.
+
+    Strategy: find years that look "complete" (have the most issues of any year),
+    then check whether those years all share the same set of months.  If yes, that
+    consistent set is returned as the expected schedule.  Falls back to None so the
+    caller can try a hardcoded table or ALL_MONTHS.
+
+    A threshold of 9 is used so monthly magazines (12 issues) and near-monthly
+    magazines (10-11) are never mis-classified as sub-monthly.
+    """
+    # Only consider years with at least 2 dated issues (ignore year-only entries)
+    year_data = [months for months in issues_by_year.values() if len(months) >= 2]
+    if len(year_data) < 2:
+        return None
+
+    max_count = max(len(m) for m in year_data)
+    if max_count >= 9:          # monthly or near-monthly — don't override
+        return None
+
+    full_years = [m for m in year_data if len(m) == max_count]
+    if len(full_years) < 2:     # need at least two "complete" years to be confident
+        return None
+
+    # All complete years must share exactly the same months
+    common = set.intersection(*[set(m) for m in full_years])
+    if len(common) != max_count:
+        return None
+
+    return sorted(common, key=lambda m: MONTH_NUM_FROM_NAME[m])
+
+
+def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None, log_fn=None, progress_fn=None):
     """
     Move and rename PDFs from source_dir into dest_dir/YYYY/ subfolders.
     Returns (moved_count, already_correct_count, unrecognized_count, missing_report_lines).
+    progress_fn, if provided, is called with (current, total) after each file is processed.
     """
     def _log(msg):
         logger.info(msg)
         if log_fn:
             log_fn(msg)
 
+    # Pre-collect all PDF paths so we can report total progress
+    all_pdfs = []
+    for root, _, files in os.walk(source_dir):
+        for fname in files:
+            if fname.lower().endswith(".pdf"):
+                all_pdfs.append((root, fname))
+    total_pdfs = len(all_pdfs)
+
     issues_by_year: dict[str, set] = {}
     observed_prefixes: set[str] = set()
     moved = already_correct = unrecognized = metadata_stamped = 0
     _diag_done = False  # log existing title of first file once for diagnostics
 
-    for root, _, files in os.walk(source_dir):
-        for fname in files:
-            if not fname.lower().endswith(".pdf"):
-                continue
-            fpath = os.path.join(root, fname)
-            parsed = parse_pdf_filename(fpath, hint_prefix)
-            if not parsed:
-                _log(f"  Skipping (unrecognized, no date found in filename or PDF content): {fname}")
-                unrecognized += 1
-                continue
-            new_stem, year, mname = parsed
-            observed_prefixes.add(new_stem.split("-")[0].upper())
-            year_dir = os.path.join(dest_dir, year)
-            expected_path = os.path.join(year_dir, new_stem + ".pdf")
-            fname_stem = os.path.splitext(fname)[0]
-            actual_dir  = os.path.normcase(os.path.abspath(root))
-            expected_dir = os.path.normcase(os.path.abspath(year_dir))
-            is_duplicate_variant = (
-                actual_dir == expected_dir
-                and re.fullmatch(re.escape(new_stem) + r"-\d+", fname_stem, re.IGNORECASE)
-            )
-            if not _diag_done:
-                try:
-                    import io as _io, pypdf as _pypdf
-                    with open(fpath, "rb") as _f:
-                        _existing_title = (_pypdf.PdfReader(_io.BytesIO(_f.read())).metadata or {}).get("/Title", "<not set>")
-                    _log(f"  [diag] existing /Title in {fname!r}: {_existing_title!r}")
-                except Exception as _e:
-                    _log(f"  [diag] could not read title from {fname!r}: {_e}")
-                _diag_done = True
-            if is_duplicate_variant or os.path.normcase(os.path.abspath(fpath)) == os.path.normcase(os.path.abspath(expected_path)):
-                if mname:
-                    issues_by_year.setdefault(year, set()).add(mname)
-                else:
-                    issues_by_year.setdefault(year, set())
-                if _stamp_pdf_metadata(fpath, mname, year, warn_fn=_log):
-                    _log(f"  Metadata updated: {fname}")
-                    metadata_stamped += 1
-                already_correct += 1
-                continue
-            os.makedirs(year_dir, exist_ok=True)
-            dest_path = _unique_path(expected_path)
-            shutil.move(fpath, dest_path)
-            if _stamp_pdf_metadata(dest_path, mname, year, warn_fn=_log):
-                metadata_stamped += 1
-            _log(f"  {fname}  →  {dest_path}")
+    for file_idx, (root, fname) in enumerate(all_pdfs):
+        fpath = os.path.join(root, fname)
+        parsed = parse_pdf_filename(fpath, hint_prefix)
+        if not parsed:
+            _log(f"  Skipping (unrecognized, no date found in filename or PDF content): {fname}")
+            unrecognized += 1
+            if progress_fn:
+                progress_fn(file_idx + 1, total_pdfs)
+            continue
+        new_stem, year, mname = parsed
+        observed_prefixes.add(new_stem.split("-")[0].upper())
+        year_dir = os.path.join(dest_dir, year)
+        expected_path = os.path.join(year_dir, new_stem + ".pdf")
+        fname_stem = os.path.splitext(fname)[0]
+        actual_dir  = os.path.normcase(os.path.abspath(root))
+        expected_dir = os.path.normcase(os.path.abspath(year_dir))
+        is_duplicate_variant = (
+            actual_dir == expected_dir
+            and re.fullmatch(re.escape(new_stem) + r"-\d+", fname_stem, re.IGNORECASE)
+        )
+        if not _diag_done:
+            try:
+                import io as _io, pypdf as _pypdf
+                with open(fpath, "rb") as _f:
+                    _existing_title = (_pypdf.PdfReader(_io.BytesIO(_f.read())).metadata or {}).get("/Title", "<not set>")
+                _log(f"  [diag] existing /Title in {fname!r}: {_existing_title!r}")
+            except Exception as _e:
+                _log(f"  [diag] could not read title from {fname!r}: {_e}")
+            _diag_done = True
+        if is_duplicate_variant or os.path.normcase(os.path.abspath(fpath)) == os.path.normcase(os.path.abspath(expected_path)):
             if mname:
                 issues_by_year.setdefault(year, set()).add(mname)
             else:
                 issues_by_year.setdefault(year, set())
-            moved += 1
+            if _stamp_pdf_metadata(fpath, mname, year, warn_fn=_log):
+                _log(f"  Metadata updated: {fname}")
+                metadata_stamped += 1
+            already_correct += 1
+            if progress_fn:
+                progress_fn(file_idx + 1, total_pdfs)
+            continue
+        os.makedirs(year_dir, exist_ok=True)
+        dest_path = _unique_path(expected_path)
+        shutil.move(fpath, dest_path)
+        if _stamp_pdf_metadata(dest_path, mname, year, warn_fn=_log):
+            metadata_stamped += 1
+        _log(f"  {fname}  →  {dest_path}")
+        if mname:
+            issues_by_year.setdefault(year, set()).add(mname)
+        else:
+            issues_by_year.setdefault(year, set())
+        moved += 1
+        if progress_fn:
+            progress_fn(file_idx + 1, total_pdfs)
 
     # Determine expected months from hint_prefix, or from the single observed prefix
     _pfx = hint_prefix or (next(iter(observed_prefixes)) if len(observed_prefixes) == 1 else None)
-    expected_months = PREFIX_ISSUE_MONTHS.get(_pfx, ALL_MONTHS) if _pfx else ALL_MONTHS
+    expected_months = _detect_issue_frequency(issues_by_year) \
+        or (PREFIX_ISSUE_MONTHS.get(_pfx, ALL_MONTHS) if _pfx else ALL_MONTHS)
+    today = datetime.date.today()
     report = []
     for year in sorted(issues_by_year):
-        missing = [m for m in expected_months if m not in issues_by_year[year]]
+        yr_int = int(year)
+        missing = [
+            m for m in expected_months
+            if m not in issues_by_year[year]
+            and datetime.date(yr_int, MONTH_NUM_FROM_NAME[m], 1) <= today
+        ]
         report.append(f"{year}: {'complete' if not missing else 'missing ' + str(missing)}")
     return moved, already_correct, unrecognized, metadata_stamped, report
 
@@ -877,23 +975,35 @@ class MagazineDownloader:
         # Give the reader a brief moment after the button appears
         time.sleep(1)
 
-        # Step 3: JS-click the download button
+        # Step 3: JS-click the download button — record handles first so we can
+        # identify any newly opened tab by set-difference rather than index.
+        handles_before = set(self._driver.window_handles)
+        original_handle = self._driver.current_window_handle
         self._driver.execute_script("arguments[0].click();", btn_el)
         self._log(f"  Clicked flipbook download button")
 
         # Step 4: check if a new tab opened containing the PDF URL
         time.sleep(2)
-        handles = self._driver.window_handles
-        if len(handles) > 1:
-            self._driver.switch_to.window(handles[-1])
-            new_url = self._driver.current_url
-            if ".pdf" in new_url.lower():
-                cookies = {c["name"]: c["value"] for c in self._driver.get_cookies()}
+        handles_after = set(self._driver.window_handles)
+        new_handles = handles_after - handles_before
+        if new_handles:
+            new_handle = next(iter(new_handles))
+            try:
+                self._driver.switch_to.window(new_handle)
+                new_url = self._driver.current_url
+                if ".pdf" in new_url.lower():
+                    cookies = {c["name"]: c["value"] for c in self._driver.get_cookies()}
+                    self._driver.close()
+                    self._driver.switch_to.window(original_handle)
+                    return self._fetch_pdf(new_url, dest_dir, hint_prefix, cookies)
                 self._driver.close()
-                self._driver.switch_to.window(handles[0])
-                return self._fetch_pdf(new_url, dest_dir, hint_prefix, cookies)
-            self._driver.close()
-            self._driver.switch_to.window(handles[0])
+            except Exception as _tab_err:
+                self._log(f"  Warning: error handling new tab: {_tab_err}")
+            finally:
+                try:
+                    self._driver.switch_to.window(original_handle)
+                except Exception:
+                    pass
 
         # Step 5: wait for a completed .pdf file in the download directory (90s)
         deadline = time.time() + 90
@@ -960,7 +1070,7 @@ class MagazineDownloader:
 
         shutil.move(src_path, dest)
         if year:
-            _stamp_pdf_metadata(dest, mname, year)
+            _stamp_pdf_metadata(dest, mname, year, warn_fn=self._log)
         self._log(f"  → {dest}")
         return dest
 
@@ -1124,6 +1234,31 @@ class DownloadWorker(QThread):
             self.signals.finished.emit()
 
 
+class OrganizeWorker(QThread):
+    """Runs organize_pdfs in a background thread."""
+    def __init__(self, source_dir: str, dest_dir: str, hint_prefix: str | None):
+        super().__init__()
+        self.source_dir  = source_dir
+        self.dest_dir    = dest_dir
+        self.hint_prefix = hint_prefix
+        self.signals     = WorkerSignals()
+        self.result      = None   # filled in by run()
+
+    def run(self):
+        try:
+            self.result = organize_pdfs(
+                self.source_dir,
+                self.dest_dir,
+                hint_prefix=self.hint_prefix,
+                log_fn=self.signals.log.emit,
+                progress_fn=self.signals.progress.emit,
+            )
+        except Exception as e:
+            self.signals.error.emit(str(e))
+        finally:
+            self.signals.finished.emit()
+
+
 class MissingIssuesWorker(QThread):
     """
     Downloads only the issues identified as missing by the organizer.
@@ -1210,6 +1345,10 @@ class MissingIssuesWorker(QThread):
 
             # Match each URL to a (year, month) by parsing its slug
             matched: list[tuple[str, str, str]] = []  # (url, year, month)
+            special: list[str] = []                   # urls with no parseable date
+            progress = load_progress()
+            # Special issues use a separate file so they survive a progress-cache clear
+            downloaded_specials = load_special_issues()
             for url in links:
                 slug = url.rstrip("/").split("/")[-1]
                 parsed = parse_pdf_filename(slug + ".pdf", hint_prefix=self.prefix)
@@ -1217,26 +1356,34 @@ class MissingIssuesWorker(QThread):
                     _, year, month = parsed
                     if month and (year, month) in targets:
                         matched.append((url, year, month))
+                else:
+                    # Special issue — skip if already downloaded in a prior run
+                    if url not in downloaded_specials:
+                        special.append(url)
 
-            if not matched:
-                self._log(
-                    "Could not match any missing issues to archive URLs.\n"
-                    "The URL slugs may not contain parseable month/year information."
-                )
+            if not matched and not special:
+                self._log("Could not match any missing issues to archive URLs.")
+                self._log("Targets: " + ", ".join(f"{y}/{m}" for y, m in sorted(targets)))
+                sample_slugs = [url.rstrip("/").split("/")[-1] for url in links[:5]]
+                self._log("Sample URL slugs: " + ", ".join(sample_slugs))
                 return
 
-            self._log(f"Matched {len(matched)} issue(s) to download.")
-            self.signals.progress.emit(0, len(matched))
+            total = len(matched) + len(special)
+            self._log(f"Matched {len(matched)} regular issue(s) and {len(special)} special issue(s) to download.")
+            self.signals.progress.emit(0, total)
 
-            progress = load_progress()
+            special_dir = os.path.join(self.dest_dir, "Special Issues")
+            if special:
+                os.makedirs(special_dir, exist_ok=True)
+
+            dl_count = 0
             for i, (url, year, month) in enumerate(matched, 1):
                 if self._stop:
                     self._log("Stopped by user.")
                     break
 
-                self._log(f"[{i}/{len(matched)}] {month} {year}  —  {url}")
-                year_dir = os.path.join(self.dest_dir, year)
-                os.makedirs(year_dir, exist_ok=True)
+                self._log(f"[{i}/{total}] {month} {year}  —  {url}")
+                os.makedirs(os.path.join(self.dest_dir, year), exist_ok=True)
 
                 ok, result = downloader.download_issue(url, dest_dir=self.dest_dir,
                                                        hint_prefix=self.prefix)
@@ -1251,8 +1398,35 @@ class MissingIssuesWorker(QThread):
                 else:
                     self._log(f"  FAILED: {result}")
 
-                self.signals.progress.emit(i, len(matched))
-                if i < len(matched) and not self._stop:
+                dl_count += 1
+                self.signals.progress.emit(dl_count, total)
+                if not self._stop:
+                    time.sleep(1 + random.uniform(0, 0.5))
+
+            for url in special:
+                if self._stop:
+                    self._log("Stopped by user.")
+                    break
+
+                slug = url.rstrip("/").split("/")[-1]
+                self._log(f"[special] {slug}  —  {url}")
+
+                ok, result = downloader.download_issue(url, dest_dir=special_dir,
+                                                       hint_prefix=self.prefix)
+                if ok:
+                    downloaded_specials.add(url)
+                    save_special_issues(downloaded_specials)
+                    self._log(f"  Downloaded: {result}")
+                elif "read-only" in result or "No PDF download available" in result:
+                    self._log(f"  [no pdf] {result}")
+                    downloaded_specials.add(url)
+                    save_special_issues(downloaded_specials)
+                else:
+                    self._log(f"  FAILED: {result}")
+
+                dl_count += 1
+                self.signals.progress.emit(dl_count, total)
+                if url != special[-1] and not self._stop:
                     time.sleep(1 + random.uniform(0, 0.5))
 
             if self.cookies_path:
@@ -1270,25 +1444,227 @@ class MissingIssuesWorker(QThread):
 # ------------------------------------------------------------------------------
 # GUI
 # ------------------------------------------------------------------------------
+_STYLESHEET = """
+/* ── Base ─────────────────────────────────────────────────────────────── */
+QMainWindow, QWidget {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    font-size: 10pt;
+}
+
+/* ── Tabs ─────────────────────────────────────────────────────────────── */
+QTabWidget::pane {
+    border: 1px solid #313244;
+    border-radius: 6px;
+    top: -1px;
+}
+QTabBar::tab {
+    background: #181825;
+    color: #6c7086;
+    padding: 8px 24px;
+    margin-right: 2px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    border: 1px solid #313244;
+    border-bottom: none;
+}
+QTabBar::tab:selected {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-bottom: 2px solid #89b4fa;
+}
+QTabBar::tab:hover:!selected { background: #313244; color: #cdd6f4; }
+
+/* ── Group boxes ──────────────────────────────────────────────────────── */
+QGroupBox {
+    border: 1px solid #313244;
+    border-radius: 6px;
+    margin-top: 10px;
+    padding: 10px 8px 8px 8px;
+    font-weight: 600;
+    color: #89b4fa;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 5px;
+}
+
+/* ── Inputs ───────────────────────────────────────────────────────────── */
+QLineEdit, QComboBox {
+    background: #313244;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 5px 8px;
+    color: #cdd6f4;
+    selection-background-color: #89b4fa;
+    selection-color: #1e1e2e;
+    min-height: 22px;
+}
+QLineEdit:focus, QComboBox:focus {
+    border-color: #89b4fa;
+}
+QLineEdit:disabled, QComboBox:disabled {
+    background: #181825;
+    color: #45475a;
+}
+QComboBox::drop-down { border: none; width: 20px; }
+QComboBox::down-arrow { width: 10px; height: 10px; }
+QComboBox QAbstractItemView {
+    background: #313244;
+    border: 1px solid #45475a;
+    color: #cdd6f4;
+    selection-background-color: #89b4fa;
+    selection-color: #1e1e2e;
+    outline: none;
+}
+
+/* ── Buttons — base ───────────────────────────────────────────────────── */
+QPushButton {
+    background: #313244;
+    border: 1px solid #45475a;
+    border-radius: 5px;
+    padding: 5px 14px;
+    color: #cdd6f4;
+    font-weight: 500;
+    min-height: 22px;
+}
+QPushButton:hover  { background: #45475a; border-color: #89b4fa; }
+QPushButton:pressed { background: #585b70; }
+QPushButton:disabled { background: #181825; color: #45475a; border-color: #313244; }
+
+/* ── Buttons — primary (action) ───────────────────────────────────────── */
+QPushButton[role="primary"] {
+    background: #89b4fa;
+    border: none;
+    color: #1e1e2e;
+    font-weight: 700;
+}
+QPushButton[role="primary"]:hover   { background: #a6c8ff; }
+QPushButton[role="primary"]:pressed { background: #7aa2f7; }
+QPushButton[role="primary"]:disabled { background: #313244; color: #6c7086; }
+
+/* ── Buttons — danger (stop) ──────────────────────────────────────────── */
+QPushButton[role="danger"] {
+    background: #f38ba8;
+    border: none;
+    color: #1e1e2e;
+    font-weight: 700;
+}
+QPushButton[role="danger"]:hover   { background: #f5a0b8; }
+QPushButton[role="danger"]:pressed { background: #eb6f92; }
+QPushButton[role="danger"]:disabled { background: #313244; color: #6c7086; }
+
+/* ── Checkboxes ───────────────────────────────────────────────────────── */
+QCheckBox { color: #cdd6f4; spacing: 7px; }
+QCheckBox::indicator {
+    width: 15px; height: 15px;
+    border: 1px solid #585b70;
+    border-radius: 3px;
+    background: #313244;
+}
+QCheckBox::indicator:hover   { border-color: #89b4fa; }
+QCheckBox::indicator:checked {
+    background: #89b4fa;
+    border-color: #89b4fa;
+    image: url(none);
+}
+QCheckBox::indicator:checked:hover { background: #a6c8ff; }
+
+/* ── Progress bar ─────────────────────────────────────────────────────── */
+QProgressBar {
+    background: #313244;
+    border: none;
+    border-radius: 5px;
+    max-height: 8px;
+    text-align: center;
+    color: transparent;
+}
+QProgressBar::chunk {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #89b4fa, stop:1 #cba6f7);
+    border-radius: 5px;
+}
+
+/* ── Log / text areas ─────────────────────────────────────────────────── */
+QTextEdit {
+    background: #11111b;
+    border: 1px solid #313244;
+    border-radius: 5px;
+    color: #cdd6f4;
+    selection-background-color: #45475a;
+    padding: 4px;
+}
+
+/* ── Labels ───────────────────────────────────────────────────────────── */
+QLabel { color: #cdd6f4; }
+QLabel[role="muted"] { color: #6c7086; font-size: 9pt; }
+
+/* ── Scrollbars ───────────────────────────────────────────────────────── */
+QScrollBar:vertical {
+    background: #1e1e2e; width: 8px; margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: #45475a; border-radius: 4px; min-height: 24px;
+}
+QScrollBar::handle:vertical:hover { background: #585b70; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QScrollBar:horizontal {
+    background: #1e1e2e; height: 8px; margin: 0;
+}
+QScrollBar::handle:horizontal {
+    background: #45475a; border-radius: 4px; min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover { background: #585b70; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+
+/* ── Tooltips ─────────────────────────────────────────────────────────── */
+QToolTip {
+    background: #313244;
+    border: 1px solid #45475a;
+    color: #cdd6f4;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+/* ── Message boxes ────────────────────────────────────────────────────── */
+QMessageBox { background: #1e1e2e; }
+QMessageBox QLabel { color: #cdd6f4; }
+"""
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Trains.com Magazine Downloader & Organizer v{APP_VERSION}")
-        self.resize(920, 740)
-        self.worker: DownloadWorker | None = None
+        self.resize(960, 780)
+        # Workers — initialised here so slots never raise AttributeError
+        self.worker:           DownloadWorker | None      = None
+        self._org_worker:      OrganizeWorker | None      = None
+        self._missing_worker:  MissingIssuesWorker | None = None
+        # Organizer state
+        self._org_hint:        str | None                 = None
+        self._org_dst:         str                        = ""
+        self._org_prefix:      str | None                 = None
+        self._missing_by_year: dict[str, list[str]]       = {}
         self._build_ui()
 
     # -- UI construction ------------------------------------------------------
     def _build_ui(self):
+        self.setStyleSheet(_STYLESHEET)
         tabs = QTabWidget()
+        tabs.setDocumentMode(True)
         self.setCentralWidget(tabs)
-        tabs.addTab(self._make_download_tab(), "Download")
-        tabs.addTab(self._make_organize_tab(), "Organize")
+        tabs.addTab(self._make_download_tab(), "  Download  ")
+        tabs.addTab(self._make_organize_tab(), "  Organize  ")
 
     def _make_download_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         # Magazine checkboxes
         mag_box = QGroupBox("Magazines to download")
@@ -1328,7 +1704,7 @@ class MainWindow(QMainWindow):
             "Tip: leave blank to log in manually each run, or select an existing .json or .pkl cookie file."
         )
         cookie_hint.setWordWrap(True)
-        cookie_hint.setStyleSheet("color: gray; font-size: 10px;")
+        cookie_hint.setProperty("role", "muted")
         cookie_col = QVBoxLayout()
         cookie_col.addLayout(cookie_row)
         cookie_col.addWidget(cookie_hint)
@@ -1350,15 +1726,18 @@ class MainWindow(QMainWindow):
 
         # Action buttons
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         self.start_btn = QPushButton("▶  Start Download")
-        self.start_btn.setFixedHeight(32)
+        self.start_btn.setFixedHeight(34)
+        self.start_btn.setProperty("role", "primary")
         self.start_btn.clicked.connect(self._start_download)
         self.stop_btn = QPushButton("■  Stop")
-        self.stop_btn.setFixedHeight(32)
+        self.stop_btn.setFixedHeight(34)
+        self.stop_btn.setProperty("role", "danger")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_download)
-        clear_btn = QPushButton("Clear progress cache")
-        clear_btn.setFixedHeight(32)
+        clear_btn = QPushButton("Clear Progress Cache")
+        clear_btn.setFixedHeight(34)
         clear_btn.clicked.connect(self._clear_progress)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.stop_btn)
@@ -1366,14 +1745,13 @@ class MainWindow(QMainWindow):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # Progress bar
+        # Progress bar + status label
         self.dl_progress = QProgressBar()
         self.dl_progress.setVisible(False)
         layout.addWidget(self.dl_progress)
 
-        # Status label
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: gray;")
+        self.status_label.setProperty("role", "muted")
         layout.addWidget(self.status_label)
 
         # Log output
@@ -1387,7 +1765,8 @@ class MainWindow(QMainWindow):
     def _make_organize_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
-        layout.setSpacing(8)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
 
         src_box = QGroupBox("Source folder (PDFs to organize)")
         src_row = QHBoxLayout(src_box)
@@ -1419,10 +1798,11 @@ class MainWindow(QMainWindow):
         prefix_row.addStretch()
         layout.addLayout(prefix_row)
 
-        run_btn = QPushButton("▶  Organize PDFs")
-        run_btn.setFixedHeight(32)
-        run_btn.clicked.connect(self._run_organize)
-        layout.addWidget(run_btn)
+        self.org_run_btn = QPushButton("▶  Organize PDFs")
+        self.org_run_btn.setFixedHeight(34)
+        self.org_run_btn.setProperty("role", "primary")
+        self.org_run_btn.clicked.connect(self._run_organize)
+        layout.addWidget(self.org_run_btn)
 
         # -- Cookie / auth row (shared with missing-issues download) ----------
         cookie_box = QGroupBox("Cookie file (required for downloading missing issues)")
@@ -1441,11 +1821,13 @@ class MainWindow(QMainWindow):
         # -- Download missing row ----------------------------------------------
         missing_row = QHBoxLayout()
         self.dl_missing_btn = QPushButton("⬇  Download Missing Issues")
-        self.dl_missing_btn.setFixedHeight(32)
+        self.dl_missing_btn.setFixedHeight(34)
+        self.dl_missing_btn.setProperty("role", "primary")
         self.dl_missing_btn.setEnabled(False)
         self.dl_missing_btn.clicked.connect(self._start_missing_download)
         self.dl_missing_stop_btn = QPushButton("■  Stop")
-        self.dl_missing_stop_btn.setFixedHeight(32)
+        self.dl_missing_stop_btn.setFixedHeight(34)
+        self.dl_missing_stop_btn.setProperty("role", "danger")
         self.dl_missing_stop_btn.setEnabled(False)
         self.dl_missing_stop_btn.clicked.connect(self._stop_missing_download)
         missing_row.addWidget(self.dl_missing_btn)
@@ -1462,6 +1844,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.org_log)
 
         return w
+
+    # -- Helpers --------------------------------------------------------------
+    @staticmethod
+    def _disconnect_worker(worker) -> None:
+        """Disconnect all signals from a worker so stale callbacks never fire."""
+        if worker is None:
+            return
+        for attr in ("log", "progress", "status_msg", "error", "finished"):
+            sig = getattr(worker.signals, attr, None)
+            if sig is not None:
+                try:
+                    sig.disconnect()
+                except TypeError:
+                    pass  # not connected — harmless
 
     # -- Slots ----------------------------------------------------------------
     def _pick_dir(self, target: QLineEdit):
@@ -1491,6 +1887,9 @@ class MainWindow(QMainWindow):
         self.dl_log.append(msg)
 
     def _start_download(self):
+        if self.worker is not None and self.worker.isRunning():
+            return  # already running — button should be disabled, but be safe
+
         magazines = [n for n, cb in self.mag_checks.items() if cb.isChecked()]
         if not magazines:
             QMessageBox.warning(self, "Nothing selected", "Select at least one magazine.")
@@ -1512,6 +1911,7 @@ class MainWindow(QMainWindow):
         self.dl_progress.setValue(0)
         self.status_label.setText("")
 
+        self._disconnect_worker(self.worker)
         self.worker = DownloadWorker(magazines, base_dir, headless, test, cookies, newest)
         self.worker.signals.log.connect(self._dl_log)
         self.worker.signals.progress.connect(self._update_progress)
@@ -1551,6 +1951,9 @@ class MainWindow(QMainWindow):
             self.org_cookie_edit.setText(path)
 
     def _run_organize(self):
+        if self._org_worker is not None and self._org_worker.isRunning():
+            return
+
         src = self.src_edit.text().strip()
         dst = self.dst_edit.text().strip()
         if not src or not dst:
@@ -1562,10 +1965,38 @@ class MainWindow(QMainWindow):
         self.org_log.clear()
         self.org_log.append(f"Organizing PDFs from: {src}")
         self.org_log.append(f"                  to: {dst}\n")
-        moved, already_correct, unrecognized, metadata_stamped, report = organize_pdfs(src, dst, hint_prefix=hint, log_fn=self.org_log.append)
+
+        self.org_run_btn.setEnabled(False)
+        self.dl_missing_btn.setEnabled(False)
+        self.org_progress.setValue(0)
+        self.org_progress.setVisible(True)
+
+        self._org_hint = hint
+        self._org_dst  = dst
+        self._disconnect_worker(self._org_worker)
+        self._org_worker = OrganizeWorker(src, dst, hint)
+        self._org_worker.signals.log.connect(self.org_log.append)
+        self._org_worker.signals.progress.connect(self._update_org_progress)
+        self._org_worker.signals.error.connect(
+            lambda msg: QMessageBox.critical(self, "Organize error", msg)
+        )
+        self._org_worker.signals.finished.connect(self._on_organize_finished)
+        self._org_worker.start()
+
+    def _on_organize_finished(self):
+        self.org_run_btn.setEnabled(True)
+        self.org_progress.setVisible(False)
+
+        if self._org_worker.result is None:
+            return  # an error was emitted; nothing to summarize
+        moved, already_correct, unrecognized, metadata_stamped, report = self._org_worker.result
+
         self.org_log.append(f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --")
         for line in report:
             self.org_log.append(line)
+
+        hint = self._org_hint
+        dst  = self._org_dst
 
         # Parse missing issues from the report so the download button can use them
         self._missing_by_year: dict[str, list[str]] = {}
@@ -1596,6 +2027,9 @@ class MainWindow(QMainWindow):
             )
 
     def _start_missing_download(self):
+        if self._missing_worker is not None and self._missing_worker.isRunning():
+            return
+
         dst = self.dst_edit.text().strip()
         if not dst or not self._org_prefix:
             return
@@ -1613,6 +2047,7 @@ class MainWindow(QMainWindow):
         self.org_progress.setVisible(True)
         self.org_progress.setValue(0)
 
+        self._disconnect_worker(self._missing_worker)
         self._missing_worker = MissingIssuesWorker(
             prefix=self._org_prefix,
             archive_url=archive_url,
@@ -1630,7 +2065,7 @@ class MainWindow(QMainWindow):
         self._missing_worker.start()
 
     def _stop_missing_download(self):
-        if hasattr(self, "_missing_worker") and self._missing_worker:
+        if self._missing_worker is not None and self._missing_worker.isRunning():
             self._missing_worker.stop()
             self.org_log.append("Stop requested…")
         self.dl_missing_stop_btn.setEnabled(False)
@@ -1641,8 +2076,11 @@ class MainWindow(QMainWindow):
             self.org_progress.setValue(current)
 
     def _on_missing_finished(self):
-        self.dl_missing_btn.setEnabled(bool(self._missing_by_year))
+        has_missing = bool(self._missing_by_year) and self._org_prefix and \
+                      _archive_url_for_prefix(self._org_prefix) is not None
+        self.dl_missing_btn.setEnabled(has_missing)
         self.dl_missing_stop_btn.setEnabled(False)
+        self.org_progress.setVisible(False)
         self.org_log.append("--- Download complete ---")
 
 
