@@ -1085,16 +1085,18 @@ class WorkerSignals(QObject):
 
 class DownloadWorker(QThread):
     def __init__(self, magazines: list, base_dir: str, headless: bool,
-                 test_mode: bool, cookies_path: str | None, newest_first: bool):
+                 test_mode: bool, cookies_path: str | None, newest_first: bool,
+                 include_specials: bool = True):
         super().__init__()
-        self.magazines    = magazines
-        self.base_dir     = base_dir
-        self.headless     = headless
-        self.test_mode    = test_mode
-        self.cookies_path = cookies_path
-        self.newest_first = newest_first
-        self.signals      = WorkerSignals()
-        self._stop        = False
+        self.magazines       = magazines
+        self.base_dir        = base_dir
+        self.headless        = headless
+        self.test_mode       = test_mode
+        self.cookies_path    = cookies_path
+        self.newest_first    = newest_first
+        self.include_specials = include_specials
+        self.signals         = WorkerSignals()
+        self._stop           = False
 
     def stop(self):
         self._stop = True
@@ -1165,6 +1167,17 @@ class DownloadWorker(QThread):
                 if not self.newest_first:   # list is already newest-first from the archive
                     links = list(reversed(links))
                 all_tasks.extend([(link, dest_dir, prefix) for link in links])
+
+                if self.include_specials:
+                    specials_url = archive_url + "special-issues/"
+                    special_dir  = os.path.join(dest_dir, "Special Issues")
+                    self._log(f"  Checking special issues at {specials_url}…")
+                    special_links = downloader.collect_all_issue_links(specials_url, max_pages=max_pages)
+                    if not self.newest_first:
+                        special_links = list(reversed(special_links))
+                    if special_links:
+                        self._log(f"  Found {len(special_links)} special issue(s).")
+                    all_tasks.extend([(link, special_dir, prefix) for link in special_links])
 
             total = len(all_tasks)
             self._log(f"\nTotal issues found: {total}")
@@ -1700,12 +1713,15 @@ class MainWindow(QMainWindow):
 
         # Options
         opts_row = QHBoxLayout()
-        self.headless_cb = QCheckBox("Headless (no browser window — requires valid cookies)")
-        self.test_cb     = QCheckBox("Test mode (first 3 pages only)")
-        self.sort_combo  = QComboBox()
+        self.headless_cb  = QCheckBox("Headless (no browser window — requires valid cookies)")
+        self.test_cb      = QCheckBox("Test mode (first 3 pages only)")
+        self.specials_cb  = QCheckBox("Include special issues")
+        self.specials_cb.setChecked(True)
+        self.sort_combo   = QComboBox()
         self.sort_combo.addItems(["Newest first", "Oldest first"])
         opts_row.addWidget(self.headless_cb)
         opts_row.addWidget(self.test_cb)
+        opts_row.addWidget(self.specials_cb)
         opts_row.addWidget(QLabel("Sort:"))
         opts_row.addWidget(self.sort_combo)
         opts_row.addStretch()
@@ -1887,10 +1903,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No folder", "Please choose a save location.")
             return
 
-        cookies  = self.cookie_edit.text().strip() or None
-        headless = self.headless_cb.isChecked()
-        test     = self.test_cb.isChecked()
-        newest   = self.sort_combo.currentText() == "Newest first"
+        cookies   = self.cookie_edit.text().strip() or None
+        headless  = self.headless_cb.isChecked()
+        test      = self.test_cb.isChecked()
+        newest    = self.sort_combo.currentText() == "Newest first"
+        specials  = self.specials_cb.isChecked()
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
@@ -1899,7 +1916,8 @@ class MainWindow(QMainWindow):
         self.status_label.setText("")
 
         self._disconnect_worker(self.worker)
-        self.worker = DownloadWorker(magazines, base_dir, headless, test, cookies, newest)
+        self.worker = DownloadWorker(magazines, base_dir, headless, test, cookies, newest,
+                                     include_specials=specials)
         self.worker.signals.log.connect(self._dl_log)
         self.worker.signals.progress.connect(self._update_progress)
         self.worker.signals.status_msg.connect(self.status_label.setText)
