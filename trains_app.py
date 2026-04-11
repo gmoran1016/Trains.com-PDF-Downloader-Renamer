@@ -14,7 +14,6 @@ import shutil
 import time
 import logging
 import random
-import pickle
 import datetime
 from calendar import month_name, month_abbr as _month_abbr
 from pathlib import Path
@@ -118,27 +117,15 @@ def load_cookies_json(path: str) -> list:
         return []
 
 
-def load_cookies_pickle(path: str) -> list:
-    """Load cookies from the legacy pickle format."""
-    if not os.path.exists(path):
-        return []
-    try:
-        with open(path, "rb") as f:
-            return pickle.load(f)
-    except Exception as e:
-        logger.warning(f"Could not load pickle cookies from {path}: {e}")
-        return []
-
-
 def load_cookies(path: str) -> list:
-    """Auto-detect JSON or pickle format and load cookies."""
+    """Load cookies from a JSON file. Pickle format is not supported (insecure deserialization)."""
     if path.endswith(".pkl") or path.endswith(".pickle"):
-        return load_cookies_pickle(path)
-    # Try JSON first; fall back to pickle
-    cookies = load_cookies_json(path)
-    if not cookies:
-        cookies = load_cookies_pickle(path)
-    return cookies
+        logger.warning(
+            f"Pickle cookie files are not supported for security reasons. "
+            f"Export your cookies as JSON instead: {path}"
+        )
+        return []
+    return load_cookies_json(path)
 
 
 # ------------------------------------------------------------------------------
