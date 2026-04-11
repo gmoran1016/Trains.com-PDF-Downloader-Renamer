@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
     QTabWidget,
 )
 from PyQt5.QtCore import pyqtSignal, QObject, QThread
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QTextCursor
 
 # ------------------------------------------------------------------------------
 # Base directory — next to the .exe when frozen, next to the script otherwise
@@ -177,6 +177,8 @@ def issue_already_on_disk(issue_url: str, dest_dir: str, prefix: str, flat: bool
     """
     Return True if the PDF for this issue URL already exists in dest_dir.
     Parses the URL slug to derive the expected filename without hitting the network.
+    Checks both the canonical name (stem.pdf) and duplicate variants (stem-1.pdf,
+    stem-2.pdf, …) created by _unique_path.
     Returns False if the slug can't be parsed (caller will attempt the download).
     """
     slug = issue_url.rstrip("/").split("/")[-1]
@@ -184,11 +186,11 @@ def issue_already_on_disk(issue_url: str, dest_dir: str, prefix: str, flat: bool
     if not parsed:
         return False
     new_stem, year, _ = parsed
-    if flat:
-        path = os.path.join(dest_dir, new_stem + ".pdf")
-    else:
-        path = os.path.join(dest_dir, year, new_stem + ".pdf")
-    return os.path.exists(path)
+    target_dir = Path(dest_dir) if flat else Path(dest_dir) / year
+    # Check canonical name first (fast path), then any -N duplicate variants
+    return (target_dir / (new_stem + ".pdf")).exists() or any(
+        target_dir.glob(f"{new_stem}-[0-9]*.pdf")
+    )
 
 
 # ------------------------------------------------------------------------------
@@ -402,12 +404,24 @@ def _extract_date_from_pdf(filepath: str):
     return None
 
 
+def _xml_escape(text: str) -> str:
+    """Escape the five predefined XML entities."""
+    return (text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&apos;"))
+
+
 def _build_xmp(title: str, mname: str | None, year: str, author: str = "") -> bytes:
     """Build a minimal XMP metadata packet for a magazine issue."""
     mnum = MONTH_NUM_FROM_NAME.get(mname, 1) if mname else 1
     date_str = f"{year}-{mnum:02d}-01"
+    safe_title  = _xml_escape(title)
+    safe_author = _xml_escape(author)
     creator_xml = (
-        f'      <dc:creator><rdf:Seq><rdf:li>{author}</rdf:li></rdf:Seq></dc:creator>\n'
+        f'      <dc:creator><rdf:Seq><rdf:li>{safe_author}</rdf:li></rdf:Seq></dc:creator>\n'
         if author else ""
     )
     return (
@@ -418,7 +432,7 @@ def _build_xmp(title: str, mname: str | None, year: str, author: str = "") -> by
         '        xmlns:dc="http://purl.org/dc/elements/1.1/"\n'
         '        xmlns:xmp="http://ns.adobe.com/xap/1.0/">\n'
         '      <dc:title><rdf:Alt>'
-        f'<rdf:li xml:lang="x-default">{title}</rdf:li>'
+        f'<rdf:li xml:lang="x-default">{safe_title}</rdf:li>'
         '</rdf:Alt></dc:title>\n'
         f'{creator_xml}'
         f'      <xmp:CreateDate>{date_str}T00:00:00</xmp:CreateDate>\n'
@@ -681,7 +695,6 @@ class MagazineDownloader:
     def __init__(self, download_dir: str, headless: bool = False, log_fn=None):
         from selenium import webdriver
         from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.chrome.service import Service
 
         self.download_dir = os.path.abspath(download_dir)
         os.makedirs(self.download_dir, exist_ok=True)
@@ -1038,9 +1051,10 @@ class MagazineDownloader:
                 "Chrome/120.0.0.0 Safari/537.36"
             )
         }
+        tmp_path = None
         try:
             r = _req.get(url, cookies=cookies, headers=headers,
-                         stream=True, timeout=120)
+                         stream=True, timeout=DOWNLOAD_TIMEOUT)
             r.raise_for_status()
 
             raw_name = os.path.basename(urlparse(url).path) or "download.pdf"
@@ -1053,9 +1067,15 @@ class MagazineDownloader:
                     f.write(chunk)
 
             dest_path = self._rename_and_move(tmp_path, dest_dir, hint_prefix, flat=flat)
+            tmp_path = None  # successfully moved — nothing to clean up
             return True, dest_path
 
         except Exception as e:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             return False, f"HTTP download failed: {e}"
 
     def _rename_and_move(self, src_path: str, dest_dir: str, hint_prefix: str | None,
@@ -1169,6 +1189,7 @@ class DownloadWorker(QThread):
 
             # -- Collect all issue links ------------------------------------
             progress = load_progress()
+            completed_set = set(progress["completed"])  # O(1) membership checks
             # each task: (url, dest_dir, prefix, flat)
             all_tasks: list[tuple[str, str, str, bool]] = []
 
@@ -1210,7 +1231,7 @@ class DownloadWorker(QThread):
                     self._log("Stopped by user.")
                     break
 
-                if issue_url in progress["completed"]:
+                if issue_url in completed_set:
                     self._log(f"[skip] {issue_url}")
                     done += 1
                     self.signals.progress.emit(done, total)
@@ -1218,6 +1239,7 @@ class DownloadWorker(QThread):
 
                 if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
                     self._log(f"[exists] {issue_url}")
+                    completed_set.add(issue_url)
                     progress["completed"].append(issue_url)
                     save_progress(progress)
                     done += 1
@@ -1228,19 +1250,21 @@ class DownloadWorker(QThread):
                 ok, result = downloader.download_issue(issue_url, dest_dir=dest_dir,
                                                        hint_prefix=prefix, flat=flat)
                 if ok:
+                    completed_set.add(issue_url)
                     progress["completed"].append(issue_url)
                     save_progress(progress)
                 elif "read-only" in result or "No PDF download available" in result:
                     # Old digitised-only issues — mark completed so they are never retried
                     self._log(f"  [no pdf] {result}")
+                    completed_set.add(issue_url)
                     progress["completed"].append(issue_url)
                     save_progress(progress)
                 else:
                     self._log(f"  FAILED: {result}")
-                    failed_urls = [
+                    failed_urls = {
                         e["url"] if isinstance(e, dict) else e
                         for e in progress["failed"]
-                    ]
+                    }
                     if issue_url not in failed_urls:
                         progress["failed"].append({"url": issue_url, "reason": result})
                     save_progress(progress)
@@ -1377,8 +1401,10 @@ class MissingIssuesWorker(QThread):
             matched: list[tuple[str, str, str]] = []  # (url, year, month)
             special: list[str] = []                   # urls with no parseable date
             progress = load_progress()
+            completed_set = set(progress["completed"])  # O(1) membership checks
             # Special issues use a separate file so they survive a progress-cache clear
             downloaded_specials = load_special_issues()
+            special_dir = os.path.join(self.dest_dir, "Special Issues")
             for url in links:
                 slug = url.rstrip("/").split("/")[-1]
                 parsed = parse_pdf_filename(slug + ".pdf", hint_prefix=self.prefix)
@@ -1388,7 +1414,9 @@ class MissingIssuesWorker(QThread):
                         matched.append((url, year, month))
                 else:
                     # Special issue — skip if already downloaded in a prior run
-                    if url not in downloaded_specials:
+                    if url not in downloaded_specials and not issue_already_on_disk(
+                        url, special_dir, self.prefix, flat=True
+                    ):
                         special.append(url)
 
             if not matched and not special:
@@ -1402,7 +1430,6 @@ class MissingIssuesWorker(QThread):
             self._log(f"Matched {len(matched)} regular issue(s) and {len(special)} special issue(s) to download.")
             self.signals.progress.emit(0, total)
 
-            special_dir = os.path.join(self.dest_dir, "Special Issues")
             if special:
                 os.makedirs(special_dir, exist_ok=True)
 
@@ -1412,17 +1439,34 @@ class MissingIssuesWorker(QThread):
                     self._log("Stopped by user.")
                     break
 
+                if url in completed_set:
+                    self._log(f"[skip] {url}")
+                    dl_count += 1
+                    self.signals.progress.emit(dl_count, total)
+                    continue
+
+                if issue_already_on_disk(url, self.dest_dir, self.prefix, flat=False):
+                    self._log(f"[exists] {month} {year}")
+                    completed_set.add(url)
+                    progress["completed"].append(url)
+                    save_progress(progress)
+                    dl_count += 1
+                    self.signals.progress.emit(dl_count, total)
+                    continue
+
                 self._log(f"[{i}/{total}] {month} {year}  —  {url}")
                 os.makedirs(os.path.join(self.dest_dir, year), exist_ok=True)
 
                 ok, result = downloader.download_issue(url, dest_dir=self.dest_dir,
                                                        hint_prefix=self.prefix)
                 if ok:
+                    completed_set.add(url)
                     progress["completed"].append(url)
                     save_progress(progress)
                     self._log(f"  Downloaded: {result}")
                 elif "read-only" in result or "No PDF download available" in result:
                     self._log(f"  [no pdf] {result}")
+                    completed_set.add(url)
                     progress["completed"].append(url)
                     save_progress(progress)
                 else:
@@ -1442,7 +1486,7 @@ class MissingIssuesWorker(QThread):
                 self._log(f"[special] {slug}  —  {url}")
 
                 ok, result = downloader.download_issue(url, dest_dir=special_dir,
-                                                       hint_prefix=self.prefix)
+                                                       hint_prefix=self.prefix, flat=True)
                 if ok:
                     downloaded_specials.add(url)
                     save_special_issues(downloaded_specials)
@@ -1599,9 +1643,8 @@ QCheckBox::indicator:hover   { border-color: #89b4fa; }
 QCheckBox::indicator:checked {
     background: #89b4fa;
     border-color: #89b4fa;
-    image: url(none);
 }
-QCheckBox::indicator:checked:hover { background: #a6c8ff; }
+QCheckBox::indicator:checked:hover { background: #a6c8ff; border-color: #a6c8ff; }
 
 /* ── Progress bar ─────────────────────────────────────────────────────── */
 QProgressBar {
@@ -1670,6 +1713,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"Trains.com Magazine Downloader & Organizer v{APP_VERSION}")
         self.resize(960, 780)
+        self.setMinimumSize(720, 560)
         # Workers — initialised here so slots never raise AttributeError
         self.worker:           DownloadWorker | None      = None
         self._org_worker:      OrganizeWorker | None      = None
@@ -1731,7 +1775,7 @@ class MainWindow(QMainWindow):
         cookie_row.addWidget(self.cookie_edit)
         cookie_row.addWidget(cookie_browse)
         cookie_hint = QLabel(
-            "Tip: leave blank to log in manually each run, or select an existing .json or .pkl cookie file."
+            "Tip: leave blank to log in manually each run, or select an existing .json cookie file."
         )
         cookie_hint.setWordWrap(True)
         cookie_hint.setProperty("role", "muted")
@@ -1742,20 +1786,32 @@ class MainWindow(QMainWindow):
         layout.addWidget(cookie_box)
 
         # Options
-        opts_row = QHBoxLayout()
-        self.headless_cb  = QCheckBox("Headless (no browser window — requires valid cookies)")
-        self.test_cb      = QCheckBox("Test mode (first 3 pages only)")
-        self.specials_cb  = QCheckBox("Include special issues")
+        opts_box = QGroupBox("Options")
+        opts_layout = QVBoxLayout(opts_box)
+
+        check_row = QHBoxLayout()
+        self.headless_cb = QCheckBox("Headless mode")
+        self.headless_cb.setToolTip(
+            "Run without a visible browser window.\nRequires a valid saved cookie file."
+        )
+        self.test_cb     = QCheckBox("Test mode (3 pages only)")
+        self.specials_cb = QCheckBox("Include special issues")
         self.specials_cb.setChecked(True)
-        self.sort_combo   = QComboBox()
+        check_row.addWidget(self.headless_cb)
+        check_row.addWidget(self.test_cb)
+        check_row.addWidget(self.specials_cb)
+        check_row.addStretch()
+        opts_layout.addLayout(check_row)
+
+        sort_row = QHBoxLayout()
+        sort_row.addWidget(QLabel("Download order:"))
+        self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Newest first", "Oldest first"])
-        opts_row.addWidget(self.headless_cb)
-        opts_row.addWidget(self.test_cb)
-        opts_row.addWidget(self.specials_cb)
-        opts_row.addWidget(QLabel("Sort:"))
-        opts_row.addWidget(self.sort_combo)
-        opts_row.addStretch()
-        layout.addLayout(opts_row)
+        sort_row.addWidget(self.sort_combo)
+        sort_row.addStretch()
+        opts_layout.addLayout(sort_row)
+
+        layout.addWidget(opts_box)
 
         # Action buttons
         btn_row = QHBoxLayout()
@@ -1916,8 +1972,21 @@ class MainWindow(QMainWindow):
         else:
             self._dl_log("No progress cache file found.")
 
+    @staticmethod
+    def _append_log(log: QTextEdit, msg: str, max_lines: int = 2000) -> None:
+        """Append a line, trim excess lines from the top, then scroll to bottom."""
+        log.append(msg)
+        doc = log.document()
+        excess = doc.blockCount() - max_lines
+        if excess > 0:
+            cur = QTextCursor(doc)
+            cur.movePosition(QTextCursor.Start)
+            cur.movePosition(QTextCursor.Down, QTextCursor.KeepAnchor, excess)
+            cur.removeSelectedText()
+        log.verticalScrollBar().setValue(log.verticalScrollBar().maximum())
+
     def _dl_log(self, msg: str):
-        self.dl_log.append(msg)
+        self._append_log(self.dl_log, msg)
 
     def _start_download(self):
         if self.worker is not None and self.worker.isRunning():
@@ -1998,8 +2067,8 @@ class MainWindow(QMainWindow):
         hint = None if pfx_text == "Auto-detect" else pfx_text
 
         self.org_log.clear()
-        self.org_log.append(f"Organizing PDFs from: {src}")
-        self.org_log.append(f"                  to: {dst}\n")
+        self._append_log(self.org_log, f"Organizing PDFs from: {src}")
+        self._append_log(self.org_log, f"                  to: {dst}\n")
 
         self.org_run_btn.setEnabled(False)
         self.dl_missing_btn.setEnabled(False)
@@ -2010,7 +2079,7 @@ class MainWindow(QMainWindow):
         self._org_dst  = dst
         self._disconnect_worker(self._org_worker)
         self._org_worker = OrganizeWorker(src, dst, hint)
-        self._org_worker.signals.log.connect(self.org_log.append)
+        self._org_worker.signals.log.connect(lambda m: self._append_log(self.org_log, m))
         self._org_worker.signals.progress.connect(self._update_org_progress)
         self._org_worker.signals.error.connect(
             lambda msg: QMessageBox.critical(self, "Organize error", msg)
@@ -2026,9 +2095,9 @@ class MainWindow(QMainWindow):
             return  # an error was emitted; nothing to summarize
         moved, already_correct, unrecognized, metadata_stamped, report = self._org_worker.result
 
-        self.org_log.append(f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --")
+        self._append_log(self.org_log, f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --")
         for line in report:
-            self.org_log.append(line)
+            self._append_log(self.org_log, line)
 
         hint = self._org_hint
         dst  = self._org_dst
@@ -2057,7 +2126,8 @@ class MainWindow(QMainWindow):
         self.dl_missing_btn.setEnabled(has_missing)
         if has_missing:
             total = sum(len(v) for v in self._missing_by_year.values())
-            self.org_log.append(
+            self._append_log(
+                self.org_log,
                 f"\n{total} missing issue(s) found — click 'Download Missing Issues' to fetch them."
             )
 
@@ -2091,7 +2161,7 @@ class MainWindow(QMainWindow):
             cookies_path=cookies,
             headless=headless,
         )
-        self._missing_worker.signals.log.connect(self.org_log.append)
+        self._missing_worker.signals.log.connect(lambda m: self._append_log(self.org_log, m))
         self._missing_worker.signals.progress.connect(self._update_org_progress)
         self._missing_worker.signals.error.connect(
             lambda msg: QMessageBox.critical(self, "Error", msg)
@@ -2102,7 +2172,7 @@ class MainWindow(QMainWindow):
     def _stop_missing_download(self):
         if self._missing_worker is not None and self._missing_worker.isRunning():
             self._missing_worker.stop()
-            self.org_log.append("Stop requested…")
+            self._append_log(self.org_log, "Stop requested…")
         self.dl_missing_stop_btn.setEnabled(False)
 
     def _update_org_progress(self, current: int, total: int):
@@ -2116,7 +2186,7 @@ class MainWindow(QMainWindow):
         self.dl_missing_btn.setEnabled(has_missing)
         self.dl_missing_stop_btn.setEnabled(False)
         self.org_progress.setVisible(False)
-        self.org_log.append("--- Download complete ---")
+        self._append_log(self.org_log, "--- Download complete ---")
 
 
 # ------------------------------------------------------------------------------
