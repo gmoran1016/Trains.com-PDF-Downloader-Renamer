@@ -819,7 +819,8 @@ class MagazineDownloader:
 
     # -- Single issue download ------------------------------------------------
     def download_issue(self, issue_url: str, dest_dir: str,
-                       hint_prefix: str | None = None) -> tuple[bool, str]:
+                       hint_prefix: str | None = None,
+                       flat: bool = False) -> tuple[bool, str]:
         """
         Three download modes for trains.com issues:
 
@@ -857,7 +858,7 @@ class MagazineDownloader:
                         break
             if pdf_url:
                 cookies = {c["name"]: c["value"] for c in self._driver.get_cookies()}
-                return self._fetch_pdf(pdf_url, dest_dir, hint_prefix, cookies)
+                return self._fetch_pdf(pdf_url, dest_dir, hint_prefix, cookies, flat=flat)
 
             # ---- Mode 2: flipbook reader ----------------------------------------
             # The btnDownloadPdf span only exists AFTER the reader is opened.
@@ -869,7 +870,7 @@ class MagazineDownloader:
                 )
             )
             if has_flipbook:
-                return self._flipbook_download(issue_url, dest_dir, hint_prefix)
+                return self._flipbook_download(issue_url, dest_dir, hint_prefix, flat=flat)
 
             # ---- Mode 3: no download available (read-only) ------------------
             return False, "No PDF download available (read-only issue)"
@@ -879,7 +880,7 @@ class MagazineDownloader:
             return False, str(e)
 
     def _flipbook_download(self, issue_url: str, dest_dir: str,
-                           hint_prefix: str | None) -> tuple[bool, str]:
+                           hint_prefix: str | None, flat: bool = False) -> tuple[bool, str]:
         """
         Open the real3d-flipbook reader, click its download button, and wait
         for the PDF to land in self.download_dir, then rename/move it.
@@ -982,7 +983,7 @@ class MagazineDownloader:
                     cookies = {c["name"]: c["value"] for c in self._driver.get_cookies()}
                     self._driver.close()
                     self._driver.switch_to.window(original_handle)
-                    return self._fetch_pdf(new_url, dest_dir, hint_prefix, cookies)
+                    return self._fetch_pdf(new_url, dest_dir, hint_prefix, cookies, flat=flat)
                 self._driver.close()
             except Exception as _tab_err:
                 self._log(f"  Warning: error handling new tab: {_tab_err}")
@@ -1000,14 +1001,14 @@ class MagazineDownloader:
             if new_files:
                 new_path = os.path.join(self.download_dir, next(iter(new_files)))
                 time.sleep(1)  # ensure file is fully written
-                dest_path = self._rename_and_move(new_path, dest_dir, hint_prefix)
+                dest_path = self._rename_and_move(new_path, dest_dir, hint_prefix, flat=flat)
                 return True, dest_path
             time.sleep(1.5)
 
         return False, "Flipbook download timed out (no file appeared within 90s)"
 
     def _fetch_pdf(self, url: str, dest_dir: str, hint_prefix: str | None,
-                   cookies: dict) -> tuple[bool, str]:
+                   cookies: dict, flat: bool = False) -> tuple[bool, str]:
         """Stream-download a PDF from a direct URL and save/rename into dest_dir."""
         import requests as _req
         from urllib.parse import urlparse
@@ -1033,23 +1034,25 @@ class MagazineDownloader:
                 for chunk in r.iter_content(chunk_size=65536):
                     f.write(chunk)
 
-            dest_path = self._rename_and_move(tmp_path, dest_dir, hint_prefix)
+            dest_path = self._rename_and_move(tmp_path, dest_dir, hint_prefix, flat=flat)
             return True, dest_path
 
         except Exception as e:
             return False, f"HTTP download failed: {e}"
 
-    def _rename_and_move(self, src_path: str, dest_dir: str, hint_prefix: str | None) -> str:
+    def _rename_and_move(self, src_path: str, dest_dir: str, hint_prefix: str | None,
+                         flat: bool = False) -> str:
         """
         Rename src_path according to our naming convention and move it into
-        dest_dir/YYYY/  (or dest_dir/ if the year can't be determined).
+        dest_dir/YYYY/  (or dest_dir/ if the year can't be determined or flat=True).
+        flat=True keeps all files directly in dest_dir regardless of year.
         """
         parsed = parse_pdf_filename(src_path, hint_prefix)
         if parsed:
             new_stem, year, mname = parsed
-            year_dir = os.path.join(dest_dir, year)
-            os.makedirs(year_dir, exist_ok=True)
-            dest = _unique_path(os.path.join(year_dir, new_stem + ".pdf"))
+            target_dir = dest_dir if flat else os.path.join(dest_dir, year)
+            os.makedirs(target_dir, exist_ok=True)
+            dest = _unique_path(os.path.join(target_dir, new_stem + ".pdf"))
         else:
             mname = year = None
             os.makedirs(dest_dir, exist_ok=True)
@@ -1148,8 +1151,8 @@ class DownloadWorker(QThread):
 
             # -- Collect all issue links ------------------------------------
             progress = load_progress()
-            # each task: (url, dest_dir, prefix)
-            all_tasks: list[tuple[str, str, str]] = []
+            # each task: (url, dest_dir, prefix, flat)
+            all_tasks: list[tuple[str, str, str, bool]] = []
 
             for mag_name in self.magazines:
                 if self._stop:
@@ -1166,7 +1169,7 @@ class DownloadWorker(QThread):
                 links = downloader.collect_all_issue_links(archive_url, max_pages=max_pages)
                 if not self.newest_first:   # list is already newest-first from the archive
                     links = list(reversed(links))
-                all_tasks.extend([(link, dest_dir, prefix) for link in links])
+                all_tasks.extend([(link, dest_dir, prefix, False) for link in links])
 
                 if self.include_specials:
                     specials_url = archive_url + "special-issues/"
@@ -1177,14 +1180,14 @@ class DownloadWorker(QThread):
                         special_links = list(reversed(special_links))
                     if special_links:
                         self._log(f"  Found {len(special_links)} special issue(s).")
-                    all_tasks.extend([(link, special_dir, prefix) for link in special_links])
+                    all_tasks.extend([(link, special_dir, prefix, True) for link in special_links])
 
             total = len(all_tasks)
             self._log(f"\nTotal issues found: {total}")
 
             # -- Download each issue ----------------------------------------
             done = 0
-            for issue_url, dest_dir, prefix in all_tasks:
+            for issue_url, dest_dir, prefix, flat in all_tasks:
                 if self._stop:
                     self._log("Stopped by user.")
                     break
@@ -1196,7 +1199,8 @@ class DownloadWorker(QThread):
                     continue
 
                 self._log(f"[{done+1}/{total}] {issue_url}")
-                ok, result = downloader.download_issue(issue_url, dest_dir=dest_dir, hint_prefix=prefix)
+                ok, result = downloader.download_issue(issue_url, dest_dir=dest_dir,
+                                                       hint_prefix=prefix, flat=flat)
                 if ok:
                     progress["completed"].append(issue_url)
                     save_progress(progress)
