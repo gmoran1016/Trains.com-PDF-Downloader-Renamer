@@ -173,6 +173,24 @@ def save_special_issues(urls: set) -> None:
         logger.error(f"Failed to save special issues: {e}")
 
 
+def issue_already_on_disk(issue_url: str, dest_dir: str, prefix: str, flat: bool) -> bool:
+    """
+    Return True if the PDF for this issue URL already exists in dest_dir.
+    Parses the URL slug to derive the expected filename without hitting the network.
+    Returns False if the slug can't be parsed (caller will attempt the download).
+    """
+    slug = issue_url.rstrip("/").split("/")[-1]
+    parsed = parse_pdf_filename(slug + ".pdf", hint_prefix=prefix)
+    if not parsed:
+        return False
+    new_stem, year, _ = parsed
+    if flat:
+        path = os.path.join(dest_dir, new_stem + ".pdf")
+    else:
+        path = os.path.join(dest_dir, year, new_stem + ".pdf")
+    return os.path.exists(path)
+
+
 # ------------------------------------------------------------------------------
 # File renamer / organizer
 # ------------------------------------------------------------------------------
@@ -1194,6 +1212,14 @@ class DownloadWorker(QThread):
 
                 if issue_url in progress["completed"]:
                     self._log(f"[skip] {issue_url}")
+                    done += 1
+                    self.signals.progress.emit(done, total)
+                    continue
+
+                if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
+                    self._log(f"[exists] {issue_url}")
+                    progress["completed"].append(issue_url)
+                    save_progress(progress)
                     done += 1
                     self.signals.progress.emit(done, total)
                     continue
