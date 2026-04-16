@@ -293,6 +293,60 @@ def fetch_pdf(url: str, dest_dir: str, hint_prefix: str | None,
         return False, f"HTTP download failed: {e}"
 
 
+def detect_download_mode(driver) -> tuple[str, str | None]:
+    """
+    Inspect the currently-loaded page and return the download mode.
+    Returns ('mode1', pdf_url), ('mode2', None), or ('mode3', None).
+    Mode 1 = direct <a> download link.
+    Mode 2 = real3d flipbook reader.
+    Mode 3 = read-only, no download.
+    """
+    from selenium.webdriver.common.by import By
+
+    for el in driver.find_elements(By.CSS_SELECTOR, "a.ci-btn--secondary[href]"):
+        href = (el.get_attribute("href") or "").strip()
+        if href:
+            return "mode1", href
+    for el in driver.find_elements(By.XPATH, "//a[normalize-space(.)='Download' and @href]"):
+        href = (el.get_attribute("href") or "").strip()
+        if href:
+            return "mode1", href
+
+    has_flipbook = bool(
+        driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover")
+        or driver.find_elements(
+            By.XPATH, "//button[contains(normalize-space(.), 'Read Magazine')]"
+        )
+    )
+    if has_flipbook:
+        return "mode2", None
+
+    return "mode3", None
+
+
+def _handle_result(ok: bool, result: str, issue_url: str,
+                   progress: dict, completed_set: set, log_fn) -> None:
+    """Update progress tracking after a download attempt."""
+    if ok:
+        completed_set.add(issue_url)
+        progress["completed"].append(issue_url)
+        save_progress(progress)
+    elif "read-only" in result or "No PDF download available" in result:
+        log_fn(f"  [no pdf] {result}")
+        completed_set.add(issue_url)
+        progress["completed"].append(issue_url)
+        save_progress(progress)
+    else:
+        log_fn(f"  FAILED: {result}")
+        failed_urls = {
+            e["url"] if isinstance(e, dict) else e
+            for e in progress["failed"]
+        }
+        if issue_url not in failed_urls:
+            progress["failed"].append({"url": issue_url, "reason": result})
+        save_progress(progress)
+
+
 def issue_already_on_disk(issue_url: str, dest_dir: str, prefix: str, flat: bool) -> bool:
     """
     Return True if the PDF for this issue URL already exists in dest_dir.
