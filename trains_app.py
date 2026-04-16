@@ -18,6 +18,7 @@ import datetime
 from calendar import month_name, month_abbr as _month_abbr
 from pathlib import Path
 from functools import wraps
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import pypdf
@@ -1249,6 +1250,7 @@ class DownloadWorker(QThread):
         self.include_specials = include_specials
         self.signals         = WorkerSignals()
         self._stop           = False
+        self._start_time: float = 0.0
 
     def stop(self):
         self._stop = True
@@ -1301,8 +1303,8 @@ class DownloadWorker(QThread):
             # -- Collect all issue links ------------------------------------
             progress = load_progress()
             completed_set = set(progress["completed"])  # O(1) membership checks
-            # each task: (url, dest_dir, prefix, flat)
-            all_tasks: list[tuple[str, str, str, bool]] = []
+            # each task: (url, dest_dir, prefix, flat, mag_name)
+            all_tasks: list[tuple[str, str, str, bool, str]] = []
 
             for mag_name in self.magazines:
                 if self._stop:
@@ -1319,7 +1321,7 @@ class DownloadWorker(QThread):
                 links = downloader.collect_all_issue_links(archive_url, max_pages=max_pages)
                 if not self.newest_first:   # list is already newest-first from the archive
                     links = list(reversed(links))
-                all_tasks.extend([(link, dest_dir, prefix, False) for link in links])
+                all_tasks.extend([(link, dest_dir, prefix, False, mag_name) for link in links])
 
                 if self.include_specials:
                     specials_url = archive_url + "special-issues/"
@@ -1330,59 +1332,94 @@ class DownloadWorker(QThread):
                         special_links = list(reversed(special_links))
                     if special_links:
                         self._log(f"  Found {len(special_links)} special issue(s).")
-                    all_tasks.extend([(link, special_dir, prefix, True) for link in special_links])
+                    all_tasks.extend([(link, special_dir, prefix, True, mag_name) for link in special_links])
 
             total = len(all_tasks)
             self._log(f"\nTotal issues found: {total}")
 
-            # -- Download each issue ----------------------------------------
+            # -- Download each issue (Mode 1 parallel, Mode 2/3 sequential) ----
+            self._start_time = time.time()
             done = 0
-            for issue_url, dest_dir, prefix, flat in all_tasks:
-                if self._stop:
-                    self._log("Stopped by user.")
-                    break
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                pending: dict = {}   # future → (issue_url, mag_name)
 
-                if issue_url in completed_set:
-                    self._log(f"[skip] {issue_url}")
+                for issue_url, dest_dir, prefix, flat, mag_name in all_tasks:
+                    if self._stop:
+                        self._log("Stopped by user.")
+                        break
+
+                    if issue_url in completed_set:
+                        self._log(f"[skip] {issue_url}")
+                        done += 1
+                        self.signals.progress.emit(done, total)
+                        continue
+
+                    if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
+                        self._log(f"[exists] {issue_url}")
+                        completed_set.add(issue_url)
+                        progress["completed"].append(issue_url)
+                        save_progress(progress)
+                        done += 1
+                        self.signals.progress.emit(done, total)
+                        continue
+
+                    self._log(f"[{done + 1}/{total}] {issue_url}")
+                    try:
+                        downloader._driver.get(issue_url)
+                        time.sleep(2 + random.uniform(0, 0.5))
+                        mode, pdf_url = detect_download_mode(downloader._driver)
+                    except Exception as e:
+                        self._log(f"  Error loading page: {e}")
+                        _handle_result(False, str(e), issue_url,
+                                       progress, completed_set, self._log)
+                        done += 1
+                        self.signals.progress.emit(done, total)
+                        continue
+
+                    if mode == "mode1":
+                        cookies = {
+                            c["name"]: c["value"]
+                            for c in downloader._driver.get_cookies()
+                        }
+                        fut = pool.submit(
+                            fetch_pdf, pdf_url, dest_dir, prefix,
+                            cookies, flat, downloader.download_dir, self._log
+                        )
+                        pending[fut] = (issue_url, mag_name)
+                        # Don't increment done yet — wait for future to complete
+                    elif mode == "mode2":
+                        try:
+                            ok, result = downloader._flipbook_download(
+                                issue_url, dest_dir, prefix, flat=flat
+                            )
+                        except Exception as e:
+                            ok, result = False, str(e)
+                        _handle_result(ok, result, issue_url,
+                                       progress, completed_set, self._log)
+                        done += 1
+                        self.signals.progress.emit(done, total)
+                        time.sleep(1 + random.uniform(0, 0.5))
+                    else:  # mode3
+                        _handle_result(
+                            False, "No PDF download available (read-only issue)",
+                            issue_url, progress, completed_set, self._log
+                        )
+                        done += 1
+                        self.signals.progress.emit(done, total)
+
+                # Drain completed Mode 1 futures
+                for fut in as_completed(pending):
+                    if self._stop:
+                        break
+                    issue_url, mag_name = pending[fut]
+                    try:
+                        ok, result = fut.result()
+                    except Exception as e:
+                        ok, result = False, str(e)
+                    _handle_result(ok, result, issue_url,
+                                   progress, completed_set, self._log)
                     done += 1
                     self.signals.progress.emit(done, total)
-                    continue
-
-                if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
-                    self._log(f"[exists] {issue_url}")
-                    completed_set.add(issue_url)
-                    progress["completed"].append(issue_url)
-                    save_progress(progress)
-                    done += 1
-                    self.signals.progress.emit(done, total)
-                    continue
-
-                self._log(f"[{done+1}/{total}] {issue_url}")
-                ok, result = downloader.download_issue(issue_url, dest_dir=dest_dir,
-                                                       hint_prefix=prefix, flat=flat)
-                if ok:
-                    completed_set.add(issue_url)
-                    progress["completed"].append(issue_url)
-                    save_progress(progress)
-                elif "read-only" in result or "No PDF download available" in result:
-                    # Old digitised-only issues — mark completed so they are never retried
-                    self._log(f"  [no pdf] {result}")
-                    completed_set.add(issue_url)
-                    progress["completed"].append(issue_url)
-                    save_progress(progress)
-                else:
-                    self._log(f"  FAILED: {result}")
-                    failed_urls = {
-                        e["url"] if isinstance(e, dict) else e
-                        for e in progress["failed"]
-                    }
-                    if issue_url not in failed_urls:
-                        progress["failed"].append({"url": issue_url, "reason": result})
-                    save_progress(progress)
-
-                done += 1
-                self.signals.progress.emit(done, total)
-                time.sleep(1 + random.uniform(0, 0.5))
 
             self._log(f"\nSession complete. {len(progress['completed'])} total downloaded.")
 
