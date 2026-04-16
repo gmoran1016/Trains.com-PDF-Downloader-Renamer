@@ -92,6 +92,7 @@ _NON_ISSUE_SLUGS = frozenset({
 DEFAULT_COOKIES_FILE = os.path.join(_BASE_DIR, "session_cookies.json")
 PROGRESS_FILE       = os.path.join(_BASE_DIR, "download_progress.json")
 SPECIAL_ISSUES_FILE = os.path.join(_BASE_DIR, "special_issues.json")
+SETTINGS_FILE       = os.path.join(_BASE_DIR, "settings.json")
 DOWNLOAD_TIMEOUT = 120   # seconds to wait for a PDF download
 LOGIN_TIMEOUT = 300      # seconds to wait for manual login (5 min)
 
@@ -171,6 +172,25 @@ def save_special_issues(urls: set) -> None:
             json.dump(sorted(urls), f, indent=2)
     except Exception as e:
         logger.error(f"Failed to save special issues: {e}")
+
+
+def load_settings(path: str = SETTINGS_FILE) -> dict:
+    """Load UI settings from JSON. Returns {} on any error."""
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_settings(data: dict, path: str = SETTINGS_FILE) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Failed to save settings: {e}")
 
 
 def issue_already_on_disk(issue_url: str, dest_dir: str, prefix: str, flat: bool) -> bool:
@@ -1729,7 +1749,10 @@ class MainWindow(QMainWindow):
         self._org_dst:         str                        = ""
         self._org_prefix:      str | None                 = None
         self._missing_by_year: dict[str, list[str]]       = {}
+        self._dl_log_lines:  list[str] = []
+        self._org_log_lines: list[str] = []
         self._build_ui()
+        self._load_settings()
 
     # -- UI construction ------------------------------------------------------
     def _build_ui(self):
@@ -1867,6 +1890,16 @@ class MainWindow(QMainWindow):
         self.dl_log.setReadOnly(True)
         layout.addWidget(self.dl_log)
 
+        # Persist settings on every change
+        self.dir_edit.textChanged.connect(self._save_settings)
+        self.cookie_edit.textChanged.connect(self._save_settings)
+        self.headless_cb.stateChanged.connect(self._save_settings)
+        self.test_cb.stateChanged.connect(self._save_settings)
+        self.specials_cb.stateChanged.connect(self._save_settings)
+        self.sort_combo.currentIndexChanged.connect(self._save_settings)
+        for cb in self.mag_checks.values():
+            cb.stateChanged.connect(self._save_settings)
+
         return w
 
     def _make_organize_tab(self) -> QWidget:
@@ -1978,6 +2011,13 @@ class MainWindow(QMainWindow):
         self.org_log = QTextEdit()
         self.org_log.setReadOnly(True)
         layout.addWidget(self.org_log)
+
+        # Persist settings on every change
+        self.src_edit.textChanged.connect(self._save_settings)
+        self.dst_edit.textChanged.connect(self._save_settings)
+        self.prefix_combo.currentIndexChanged.connect(self._save_settings)
+        self.org_cookie_edit.textChanged.connect(self._save_settings)
+        self.org_headless_cb.stateChanged.connect(self._save_settings)
 
         return w
 
@@ -2101,6 +2141,53 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.org_cookie_edit.setText(path)
+
+    def _load_settings(self):
+        s = load_settings()
+        if "base_dir" in s:
+            self.dir_edit.setText(s["base_dir"])
+        if "cookies_path" in s:
+            self.cookie_edit.setText(s["cookies_path"])
+        if "headless" in s:
+            self.headless_cb.setChecked(s["headless"])
+        if "test_mode" in s:
+            self.test_cb.setChecked(s["test_mode"])
+        if "newest_first" in s:
+            self.sort_combo.setCurrentIndex(0 if s["newest_first"] else 1)
+        if "include_specials" in s:
+            self.specials_cb.setChecked(s["include_specials"])
+        if "selected_magazines" in s:
+            sel = set(s["selected_magazines"])
+            for name, cb in self.mag_checks.items():
+                cb.setChecked(name in sel)
+        if "org_src" in s:
+            self.src_edit.setText(s["org_src"])
+        if "org_dst" in s:
+            self.dst_edit.setText(s["org_dst"])
+        if "org_prefix" in s:
+            idx = self.prefix_combo.findText(s["org_prefix"])
+            if idx >= 0:
+                self.prefix_combo.setCurrentIndex(idx)
+        if "org_cookies" in s:
+            self.org_cookie_edit.setText(s["org_cookies"])
+        if "org_headless" in s:
+            self.org_headless_cb.setChecked(s["org_headless"])
+
+    def _save_settings(self):
+        save_settings({
+            "base_dir":           self.dir_edit.text(),
+            "cookies_path":       self.cookie_edit.text(),
+            "headless":           self.headless_cb.isChecked(),
+            "test_mode":          self.test_cb.isChecked(),
+            "newest_first":       self.sort_combo.currentText() == "Newest first",
+            "include_specials":   self.specials_cb.isChecked(),
+            "selected_magazines": [n for n, cb in self.mag_checks.items() if cb.isChecked()],
+            "org_src":            self.src_edit.text(),
+            "org_dst":            self.dst_edit.text(),
+            "org_prefix":         self.prefix_combo.currentText(),
+            "org_cookies":        self.org_cookie_edit.text(),
+            "org_headless":       self.org_headless_cb.isChecked(),
+        })
 
     def _run_organize(self):
         if self._org_worker is not None and self._org_worker.isRunning():
