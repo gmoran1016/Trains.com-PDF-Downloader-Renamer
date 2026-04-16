@@ -2213,49 +2213,15 @@ class MainWindow(QMainWindow):
             color = "#a6adc8"
         return f'<span style="color:{color}">{esc}</span>'
 
-    def _append_log(self, log: QTextEdit, msg: str,
-                    lines_buf: list, filter_edit: QLineEdit,
-                    badge_label: QLabel, max_lines: int = 2000) -> None:
-        lines_buf.append(msg)
-        if len(lines_buf) > max_lines:
-            lines_buf.pop(0)
-
-        error_count = sum(1 for l in lines_buf if "FAILED" in l or "ERROR:" in l)
-        if error_count > 0:
-            badge_label.setText(f"{error_count} error{'s' if error_count != 1 else ''}")
-            badge_label.setVisible(True)
-        else:
-            badge_label.setVisible(False)
-
-        filt = filter_edit.text().strip().lower()
-        if filt and filt not in msg.lower():
-            return
-        log.append(self._colorize(msg))
-        log.verticalScrollBar().setValue(log.verticalScrollBar().maximum())
-
-    def _rebuild_log(self, log: QTextEdit, lines_buf: list, filter_edit: QLineEdit) -> None:
-        filt = filter_edit.text().strip().lower()
-        log.clear()
-        for line in lines_buf:
-            if filt and filt not in line.lower():
-                continue
-            log.append(self._colorize(line))
-        log.verticalScrollBar().setValue(log.verticalScrollBar().maximum())
-
-    def _copy_errors(self, lines_buf: list) -> None:
-        errors = [l for l in lines_buf if "FAILED" in l or "ERROR:" in l]
-        if errors:
-            QApplication.clipboard().setText("\n".join(errors))
-
-    def _dl_log(self, msg: str):
-        self._append_log(self.dl_log, msg,
-                         self._dl_log_lines, self._dl_filter, self._dl_error_badge)
+    def _log(self, msg: str) -> None:
+        self.log.append(self._colorize(msg))
+        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
 
     def _start_download(self):
         if self.worker is not None and self.worker.isRunning():
-            return  # already running — button should be disabled, but be safe
+            return
 
-        magazines = [n for n, cb in self.mag_checks.items() if cb.isChecked()]
+        magazines = [n for n, btn in self.mag_chips.items() if btn.isChecked()]
         if not magazines:
             QMessageBox.warning(self, "Nothing selected", "Select at least one magazine.")
             return
@@ -2265,52 +2231,25 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No folder", "Please choose a save location.")
             return
 
-        cookies   = self.cookie_edit.text().strip() or None
-        headless  = self.headless_cb.isChecked()
-        test      = self.test_cb.isChecked()
-        newest    = self.sort_combo.currentText() == "Newest first"
-        specials  = self.specials_cb.isChecked()
+        cookies  = self.cookie_edit.text().strip() or None
+        headless = self.headless_cb.isChecked()
+        test     = self.test_cb.isChecked()
+        newest   = self.sort_combo.currentText() == "Newest first"
+        specials = self.specials_cb.isChecked()
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.status_label.setText("")
-
-        # Build per-magazine progress rows
-        prog_layout = self._progress_container.layout()
-        while prog_layout.count() > 1:
-            item = prog_layout.takeAt(1)
-            if item.widget():
-                item.widget().deleteLater()
-        self._mag_bar_rows = {}
-        for mag_name in magazines:
-            row_widget = QWidget()
-            row_layout = QVBoxLayout(row_widget)
-            row_layout.setContentsMargins(0, 0, 0, 2)
-            row_layout.setSpacing(2)
-            header = QHBoxLayout()
-            name_lbl = QLabel(mag_name)
-            count_lbl = QLabel("0 / ?")
-            count_lbl.setProperty("role", "muted")
-            header.addWidget(name_lbl)
-            header.addStretch()
-            header.addWidget(count_lbl)
-            bar = QProgressBar()
-            bar.setValue(0)
-            bar.setMaximum(1)
-            row_layout.addLayout(header)
-            row_layout.addWidget(bar)
-            prog_layout.addWidget(row_widget)
-            self._mag_bar_rows[mag_name] = (count_lbl, bar)
-        self._summary_label.setText("Starting…")
-        self._progress_container.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setMaximum(1)
+        self.progress_bar.setVisible(True)
+        self.status_label.setText("Starting…")
 
         self._disconnect_worker(self.worker)
         self.worker = DownloadWorker(magazines, base_dir, headless, test, cookies, newest,
                                      include_specials=specials)
-        self.worker.signals.log.connect(self._dl_log)
+        self.worker.signals.log.connect(self._log)
         self.worker.signals.progress.connect(self._update_progress)
-        self.worker.signals.magazine_progress.connect(self._update_mag_progress)
-        self.worker.signals.status_msg.connect(self._summary_label.setText)
+        self.worker.signals.status_msg.connect(self.status_label.setText)
         self.worker.signals.error.connect(self._on_error)
         self.worker.signals.finished.connect(self._on_finished)
         self.worker.start()
@@ -2318,41 +2257,27 @@ class MainWindow(QMainWindow):
     def _stop_download(self):
         if self.worker:
             self.worker.stop()
-            self._dl_log("Stop requested — waiting for current issue to finish…")
+            self._log("Stop requested — waiting for current issue to finish…")
         self.stop_btn.setEnabled(False)
-
-    def _update_mag_progress(self, mag_name: str, done: int, total: int):
-        if mag_name not in self._mag_bar_rows:
-            return
-        count_lbl, bar = self._mag_bar_rows[mag_name]
-        bar.setMaximum(total)
-        bar.setValue(done)
-        count_lbl.setText(f"{done} / {total}")
 
     def _update_progress(self, current: int, total: int):
         if total > 0:
+            self.progress_bar.setMaximum(total)
+            self.progress_bar.setValue(current)
             self.status_label.setText(f"{current} / {total} issues")
             self._tray.setToolTip(f"Trains Downloader — {current} / {total} downloading…")
 
     def _on_error(self, msg: str):
-        self._dl_log(f"ERROR: {msg}")
+        self._log(f"ERROR: {msg}")
         QMessageBox.critical(self, "Error", msg)
 
     def _on_finished(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self._progress_container.setVisible(False)
-        self._dl_log("--- Done ---")
+        self.progress_bar.setVisible(False)
+        self._log("--- Done ---")
         self.status_label.setText("Done.")
         self._tray.setToolTip("Trains Downloader — Idle")
-
-    def _browse_org_cookies(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select cookie file", "",
-            "Cookie files (*.json);;All files (*)"
-        )
-        if path:
-            self.org_cookie_edit.setText(path)
 
     def _setup_tray(self):
         QApplication.instance().setQuitOnLastWindowClosed(False)
@@ -2416,8 +2341,8 @@ class MainWindow(QMainWindow):
             self.specials_cb.setChecked(s["include_specials"])
         if "selected_magazines" in s:
             sel = set(s["selected_magazines"])
-            for name, cb in self.mag_checks.items():
-                cb.setChecked(name in sel)
+            for name, btn in self.mag_chips.items():
+                btn.setChecked(name in sel)
         if "org_src" in s:
             self.src_edit.setText(s["org_src"])
         if "org_dst" in s:
@@ -2426,8 +2351,6 @@ class MainWindow(QMainWindow):
             idx = self.prefix_combo.findText(s["org_prefix"])
             if idx >= 0:
                 self.prefix_combo.setCurrentIndex(idx)
-        if "org_cookies" in s:
-            self.org_cookie_edit.setText(s["org_cookies"])
         if "org_headless" in s:
             self.org_headless_cb.setChecked(s["org_headless"])
 
@@ -2439,11 +2362,10 @@ class MainWindow(QMainWindow):
             "test_mode":          self.test_cb.isChecked(),
             "newest_first":       self.sort_combo.currentText() == "Newest first",
             "include_specials":   self.specials_cb.isChecked(),
-            "selected_magazines": [n for n, cb in self.mag_checks.items() if cb.isChecked()],
+            "selected_magazines": [n for n, btn in self.mag_chips.items() if btn.isChecked()],
             "org_src":            self.src_edit.text(),
             "org_dst":            self.dst_edit.text(),
             "org_prefix":         self.prefix_combo.currentText(),
-            "org_cookies":        self.org_cookie_edit.text(),
             "org_headless":       self.org_headless_cb.isChecked(),
         })
 
@@ -2459,26 +2381,20 @@ class MainWindow(QMainWindow):
         pfx_text = self.prefix_combo.currentText()
         hint = None if pfx_text == "Auto-detect" else pfx_text
 
-        self.org_log.clear()
-        self._org_log_lines.clear()
-        self._append_log(self.org_log, f"Organizing PDFs from: {src}",
-                         self._org_log_lines, self._org_filter, self._org_error_badge)
-        self._append_log(self.org_log, f"                  to: {dst}\n",
-                         self._org_log_lines, self._org_filter, self._org_error_badge)
+        self.log.clear()
+        self._log(f"Organizing PDFs from: {src}")
+        self._log(f"                  to: {dst}\n")
 
-        self.org_run_btn.setEnabled(False)
+        self.org_btn.setEnabled(False)
         self.dl_missing_btn.setEnabled(False)
-        self.org_progress.setValue(0)
-        self.org_progress.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
 
         self._org_hint = hint
         self._org_dst  = dst
         self._disconnect_worker(self._org_worker)
         self._org_worker = OrganizeWorker(src, dst, hint)
-        self._org_worker.signals.log.connect(
-            lambda m: self._append_log(self.org_log, m,
-                                       self._org_log_lines, self._org_filter, self._org_error_badge)
-        )
+        self._org_worker.signals.log.connect(self._log)
         self._org_worker.signals.progress.connect(self._update_org_progress)
         self._org_worker.signals.error.connect(
             lambda msg: QMessageBox.critical(self, "Organize error", msg)
@@ -2487,23 +2403,21 @@ class MainWindow(QMainWindow):
         self._org_worker.start()
 
     def _on_organize_finished(self):
-        self.org_run_btn.setEnabled(True)
-        self.org_progress.setVisible(False)
+        self.org_btn.setEnabled(True)
+        self.progress_bar.setVisible(False)
 
         if self._org_worker.result is None:
-            return  # an error was emitted; nothing to summarize
+            return
         moved, already_correct, unrecognized, metadata_stamped, report = self._org_worker.result
 
-        self._append_log(self.org_log, f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --",
-                         self._org_log_lines, self._org_filter, self._org_error_badge)
+        self._log(f"\n-- {moved} moved, {already_correct} already correct, "
+                  f"{unrecognized} unrecognized, {metadata_stamped} metadata updated --")
         for line in report:
-            self._append_log(self.org_log, line,
-                             self._org_log_lines, self._org_filter, self._org_error_badge)
+            self._log(line)
 
         hint = self._org_hint
         dst  = self._org_dst
 
-        # Parse missing issues from the report so the download button can use them
         self._missing_by_year: dict[str, list[str]] = {}
         for line in report:
             m = re.match(r"(\d{4}): missing (\[.*\])", line)
@@ -2514,10 +2428,8 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
-        # Determine the magazine prefix for the destination folder
         self._org_prefix: str | None = hint
         if not self._org_prefix:
-            # Try the last component of the dest path (e.g. .../CTR → CTR)
             candidate = os.path.basename(os.path.normpath(dst)).upper()
             if candidate in PREFIX_TO_TITLE:
                 self._org_prefix = candidate
@@ -2527,11 +2439,7 @@ class MainWindow(QMainWindow):
         self.dl_missing_btn.setEnabled(has_missing)
         if has_missing:
             total = sum(len(v) for v in self._missing_by_year.values())
-            self._append_log(
-                self.org_log,
-                f"\n{total} missing issue(s) found — click 'Download Missing Issues' to fetch them.",
-                self._org_log_lines, self._org_filter, self._org_error_badge
-            )
+            self._log(f"\n{total} missing issue(s) found — click 'Download Missing' to fetch them.")
 
     def _start_missing_download(self):
         if self._missing_worker is not None and self._missing_worker.isRunning():
@@ -2546,13 +2454,13 @@ class MainWindow(QMainWindow):
                                 f"No archive URL found for prefix '{self._org_prefix}'.")
             return
 
-        cookies  = self.org_cookie_edit.text().strip() or DEFAULT_COOKIES_FILE
+        cookies  = self.cookie_edit.text().strip() or DEFAULT_COOKIES_FILE
         headless = self.org_headless_cb.isChecked()
 
         self.dl_missing_btn.setEnabled(False)
         self.dl_missing_stop_btn.setEnabled(True)
-        self.org_progress.setVisible(True)
-        self.org_progress.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
 
         self._disconnect_worker(self._missing_worker)
         self._missing_worker = MissingIssuesWorker(
@@ -2563,10 +2471,7 @@ class MainWindow(QMainWindow):
             cookies_path=cookies,
             headless=headless,
         )
-        self._missing_worker.signals.log.connect(
-            lambda m: self._append_log(self.org_log, m,
-                                       self._org_log_lines, self._org_filter, self._org_error_badge)
-        )
+        self._missing_worker.signals.log.connect(self._log)
         self._missing_worker.signals.progress.connect(self._update_org_progress)
         self._missing_worker.signals.error.connect(
             lambda msg: QMessageBox.critical(self, "Error", msg)
@@ -2577,23 +2482,21 @@ class MainWindow(QMainWindow):
     def _stop_missing_download(self):
         if self._missing_worker is not None and self._missing_worker.isRunning():
             self._missing_worker.stop()
-            self._append_log(self.org_log, "Stop requested…",
-                             self._org_log_lines, self._org_filter, self._org_error_badge)
+            self._log("Stop requested…")
         self.dl_missing_stop_btn.setEnabled(False)
 
     def _update_org_progress(self, current: int, total: int):
         if total > 0:
-            self.org_progress.setMaximum(total)
-            self.org_progress.setValue(current)
+            self.progress_bar.setMaximum(total)
+            self.progress_bar.setValue(current)
 
     def _on_missing_finished(self):
         has_missing = bool(self._missing_by_year) and self._org_prefix and \
                       _archive_url_for_prefix(self._org_prefix) is not None
         self.dl_missing_btn.setEnabled(has_missing)
         self.dl_missing_stop_btn.setEnabled(False)
-        self.org_progress.setVisible(False)
-        self._append_log(self.org_log, "--- Download complete ---",
-                         self._org_log_lines, self._org_filter, self._org_error_badge)
+        self.progress_bar.setVisible(False)
+        self._log("--- Download complete ---")
 
 
 # ------------------------------------------------------------------------------
