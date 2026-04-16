@@ -18,11 +18,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: TrainsDownloader-windows.zip
+            artifact: TrainsDownloader-windows.exe
+            dist_path: dist\TrainsDownloader.exe
           - os: ubuntu-latest
-            artifact: TrainsDownloader-linux.zip
+            artifact: TrainsDownloader-linux
+            dist_path: dist/TrainsDownloader
           - os: macos-latest
-            artifact: TrainsDownloader-macos.zip
+            artifact: TrainsDownloader-macos
+            dist_path: dist/TrainsDownloader
 
     runs-on: ${{ matrix.os }}
 
@@ -62,14 +65,9 @@ jobs:
           --hidden-import bs4
           trains_app.py
 
-      - name: Zip (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path dist\TrainsDownloader.exe -DestinationPath ${{ matrix.artifact }}
-
-      - name: Zip (Linux / macOS)
-        if: runner.os != 'Windows'
-        run: zip ${{ matrix.artifact }} dist/TrainsDownloader
+      - name: Rename executable
+        shell: bash
+        run: cp "${{ matrix.dist_path }}" "${{ matrix.artifact }}"
 
       - name: Read version
         id: version
@@ -88,8 +86,8 @@ jobs:
 
             | Platform | Download |
             |----------|----------|
-            | Windows  | `TrainsDownloader-windows.zip` → extract → run `TrainsDownloader.exe` |
-            | Linux    | `TrainsDownloader-linux.zip` → extract → `chmod +x TrainsDownloader` → run |
-            | macOS    | `TrainsDownloader-macos.zip` → extract → run `TrainsDownloader` |
+            | Windows  | `TrainsDownloader-windows.exe` → run directly |
+            | Linux    | `TrainsDownloader-linux` → `chmod +x TrainsDownloader-linux` → run |
+            | macOS    | `TrainsDownloader-macos` → run directly |
 
             **Requirement:** Chrome must be installed. ChromeDriver downloads automatically on first run.
