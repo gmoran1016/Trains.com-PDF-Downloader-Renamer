@@ -1697,57 +1697,64 @@ _STYLESHEET = """
 QMainWindow, QDialog { background-color: #13131f; }
 QWidget { color: #cdd6f4; font-family: "Segoe UI", system-ui, sans-serif; font-size: 10pt; background-color: transparent; }
 
-/* ── Header banner ────────────────────────────────────────────────────── */
-QWidget#header {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #1a1a2e, stop:0.6 #1e1e2e, stop:1 #1a1a2e);
-    border-bottom: 1px solid #2d2d45;
-}
-
-/* ── Tab widget ───────────────────────────────────────────────────────── */
-QTabWidget::pane { border: none; background: #1a1a2a; top: 0; }
-QTabBar { background: #13131f; }
-QTabBar::tab {
-    background: #13131f;
-    color: #585b70;
-    padding: 12px 32px;
-    font-weight: 600;
-    border-bottom: 3px solid transparent;
-    margin-right: 0;
-}
-QTabBar::tab:selected   { color: #cdd6f4; background: #1a1a2a; border-bottom-color: #89b4fa; }
-QTabBar::tab:hover:!selected { color: #a6adc8; background: #181826; border-bottom-color: #45475a; }
-
-/* ── Scroll area / content pane ──────────────────────────────────────── */
-QWidget#tab_content { background: #1a1a2a; }
-
-/* ── Cards (group boxes) ─────────────────────────────────────────────── */
-QGroupBox {
-    background: #1e1e2e;
+/* ── Mode toggle buttons ──────────────────────────────────────────────── */
+QPushButton[role="mode"] {
+    background: #1a1a2e;
     border: 1px solid #2a2a3e;
-    border-left: 3px solid #89b4fa;
-    border-radius: 8px;
-    margin-top: 16px;
-    padding: 12px 14px 10px 14px;
-    font-weight: 700;
-    font-size: 8.5pt;
-    color: #7287b8;
-    letter-spacing: 0.08em;
+    border-bottom: none;
+    border-radius: 8px 8px 0 0;
+    padding: 8px 28px;
+    color: #585b70;
+    font-weight: 600;
+    font-size: 10pt;
+    min-height: 0;
 }
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 14px;
-    padding: 1px 6px;
+QPushButton[role="mode"]:checked {
     background: #1e1e2e;
-    text-transform: uppercase;
+    border-color: #353550;
+    color: #cdd6f4;
 }
-QGroupBox[accent="purple"] { border-left-color: #cba6f7; }
-QGroupBox[accent="purple"]::title { color: #9a7fc7; }
-QGroupBox[accent="green"]  { border-left-color: #a6e3a1; }
-QGroupBox[accent="green"]::title  { color: #6faf6a; }
-QGroupBox[accent="teal"]   { border-left-color: #94e2d5; }
-QGroupBox[accent="teal"]::title   { color: #5fa89e; }
+QPushButton[role="mode"]:hover:!checked { color: #a6adc8; }
+
+/* ── Magazine chip buttons ────────────────────────────────────────────── */
+QPushButton[role="chip"] {
+    background: #252538;
+    border: 1px solid #353550;
+    border-radius: 20px;
+    padding: 4px 14px;
+    color: #585b70;
+    font-weight: 400;
+    font-size: 9.5pt;
+    min-height: 0;
+}
+QPushButton[role="chip"]:checked {
+    background: #2a3f6f;
+    border-color: #89b4fa;
+    color: #89b4fa;
+    font-weight: 600;
+}
+QPushButton[role="chip"]:hover:!checked { border-color: #45475a; color: #a6adc8; }
+QPushButton[role="chip"]:hover:checked  { background: #324878; }
+
+/* ── Section labels ───────────────────────────────────────────────────── */
+QLabel[role="section"] {
+    color: #45475a;
+    font-size: 8.5pt;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+}
+
+/* ── Mode panel / auth row containers ────────────────────────────────── */
+QWidget#mode_panel {
+    background: #1e1e2e;
+    border: 1px solid #353550;
+    border-radius: 0 8px 8px 8px;
+}
+QWidget#auth_row {
+    background: #1a1a2e;
+    border: 1px solid #2a2a3e;
+    border-radius: 6px;
+}
 
 /* ── Inputs ───────────────────────────────────────────────────────────── */
 QLineEdit, QComboBox {
@@ -1865,8 +1872,6 @@ QTextEdit {
 QLabel { color: #cdd6f4; background: transparent; }
 QLabel[role="muted"]    { color: #585b70; font-size: 9pt; }
 QLabel[role="app-name"] { color: #cdd6f4; font-size: 15pt; font-weight: 700; letter-spacing: -0.02em; }
-QLabel[role="app-sub"]  { color: #585b70; font-size: 9pt; }
-QLabel[role="log-cap"]  { color: #45475a; font-size: 8.5pt; font-weight: 600; letter-spacing: 0.08em; }
 QLabel[role="status"]   { color: #a6adc8; font-size: 9pt; }
 
 /* ── Thin separator line ─────────────────────────────────────────────── */
