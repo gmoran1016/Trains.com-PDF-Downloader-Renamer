@@ -1229,11 +1229,12 @@ def _archive_url_for_prefix(prefix: str) -> str | None:
 # Worker thread
 # ------------------------------------------------------------------------------
 class WorkerSignals(QObject):
-    log        = pyqtSignal(str)
-    progress   = pyqtSignal(int, int)   # (current, total)
-    status_msg = pyqtSignal(str)
-    finished   = pyqtSignal()
-    error      = pyqtSignal(str)
+    log               = pyqtSignal(str)
+    progress          = pyqtSignal(int, int)        # (current, total)
+    magazine_progress = pyqtSignal(str, int, int)   # (mag_name, done, total)
+    status_msg        = pyqtSignal(str)
+    finished          = pyqtSignal()
+    error             = pyqtSignal(str)
 
 
 class DownloadWorker(QThread):
@@ -1258,6 +1259,25 @@ class DownloadWorker(QThread):
     def _log(self, msg: str):
         logger.info(msg)
         self.signals.log.emit(msg)
+
+    def _emit_progress(self, done: int, total: int,
+                       mag_name: str | None,
+                       mag_done: dict, mag_total: dict) -> None:
+        self.signals.progress.emit(done, total)
+        if mag_name and mag_name in mag_total:
+            mag_done[mag_name] = mag_done.get(mag_name, 0) + 1
+            self.signals.magazine_progress.emit(
+                mag_name, mag_done[mag_name], mag_total[mag_name]
+            )
+        elapsed = time.time() - self._start_time
+        if elapsed > 0 and done > 0:
+            rate = done / elapsed
+            eta_sec = int((total - done) / rate) if rate > 0 else 0
+            mins, secs = divmod(eta_sec, 60)
+            eta_str = f"~{mins}m {secs:02d}s remaining" if eta_sec > 0 else "almost done"
+        else:
+            eta_str = "calculating..."
+        self.signals.status_msg.emit(f"{done} / {total} issues · {eta_str}")
 
     def run(self):
         downloader = None
@@ -1337,6 +1357,12 @@ class DownloadWorker(QThread):
             total = len(all_tasks)
             self._log(f"\nTotal issues found: {total}")
 
+            mag_done: dict[str, int] = {}
+            mag_total: dict[str, int] = {}
+            for _, _, _, _, mn in all_tasks:
+                if mn:
+                    mag_total[mn] = mag_total.get(mn, 0) + 1
+
             # -- Download each issue (Mode 1 parallel, Mode 2/3 sequential) ----
             self._start_time = time.time()
             done = 0
@@ -1351,7 +1377,7 @@ class DownloadWorker(QThread):
                     if issue_url in completed_set:
                         self._log(f"[skip] {issue_url}")
                         done += 1
-                        self.signals.progress.emit(done, total)
+                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
                         continue
 
                     if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
@@ -1360,7 +1386,7 @@ class DownloadWorker(QThread):
                         progress["completed"].append(issue_url)
                         save_progress(progress)
                         done += 1
-                        self.signals.progress.emit(done, total)
+                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
                         continue
 
                     self._log(f"[{done + 1}/{total}] {issue_url}")
@@ -1373,7 +1399,7 @@ class DownloadWorker(QThread):
                         _handle_result(False, str(e), issue_url,
                                        progress, completed_set, self._log)
                         done += 1
-                        self.signals.progress.emit(done, total)
+                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
                         continue
 
                     if mode == "mode1":
@@ -1397,7 +1423,7 @@ class DownloadWorker(QThread):
                         _handle_result(ok, result, issue_url,
                                        progress, completed_set, self._log)
                         done += 1
-                        self.signals.progress.emit(done, total)
+                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
                         time.sleep(1 + random.uniform(0, 0.5))
                     else:  # mode3
                         _handle_result(
@@ -1405,7 +1431,7 @@ class DownloadWorker(QThread):
                             issue_url, progress, completed_set, self._log
                         )
                         done += 1
-                        self.signals.progress.emit(done, total)
+                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
 
                 # Drain completed Mode 1 futures
                 for fut in as_completed(pending):
@@ -1419,7 +1445,7 @@ class DownloadWorker(QThread):
                     _handle_result(ok, result, issue_url,
                                    progress, completed_set, self._log)
                     done += 1
-                    self.signals.progress.emit(done, total)
+                    self._emit_progress(done, total, mag_name, mag_done, mag_total)
 
             self._log(f"\nSession complete. {len(progress['completed'])} total downloaded.")
 
@@ -2005,9 +2031,17 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_row)
 
         # ── Progress / status ──────────────────────────────────────────────────
-        self.dl_progress = QProgressBar()
-        self.dl_progress.setVisible(False)
-        layout.addWidget(self.dl_progress)
+        # Progress container — holds one bar per magazine + summary label
+        self._progress_container = QWidget()
+        self._progress_container.setVisible(False)
+        prog_layout = QVBoxLayout(self._progress_container)
+        prog_layout.setContentsMargins(0, 0, 0, 0)
+        prog_layout.setSpacing(6)
+        self._mag_bar_rows: dict[str, tuple] = {}  # mag_name → (count_label, QProgressBar)
+        self._summary_label = QLabel("")
+        self._summary_label.setProperty("role", "status")
+        prog_layout.addWidget(self._summary_label)
+        layout.addWidget(self._progress_container)
 
         status_row = QHBoxLayout()
         self.status_label = QLabel("")
@@ -2021,9 +2055,30 @@ class MainWindow(QMainWindow):
         log_cap.setProperty("role", "log-cap")
         layout.addWidget(log_cap)
 
+        log_toolbar = QHBoxLayout()
+        self._dl_filter = QLineEdit()
+        self._dl_filter.setPlaceholderText("Filter log…")
+        self._dl_filter.setFixedHeight(28)
+        self._dl_error_badge = QLabel("")
+        self._dl_error_badge.setVisible(False)
+        self._dl_error_badge.setStyleSheet("color:#f38ba8;font-weight:600;padding:0 6px")
+        self._dl_copy_errors_btn = QPushButton("Copy Errors")
+        self._dl_copy_errors_btn.setFixedHeight(28)
+        self._dl_copy_errors_btn.clicked.connect(
+            lambda: self._copy_errors(self._dl_log_lines)
+        )
+        log_toolbar.addWidget(self._dl_filter)
+        log_toolbar.addWidget(self._dl_error_badge)
+        log_toolbar.addWidget(self._dl_copy_errors_btn)
+        layout.addLayout(log_toolbar)
+
         self.dl_log = QTextEdit()
         self.dl_log.setReadOnly(True)
         layout.addWidget(self.dl_log)
+
+        self._dl_filter.textChanged.connect(
+            lambda: self._rebuild_log(self.dl_log, self._dl_log_lines, self._dl_filter)
+        )
 
         # Persist settings on every change
         self.dir_edit.textChanged.connect(self._save_settings)
@@ -2143,9 +2198,30 @@ class MainWindow(QMainWindow):
         log_cap.setProperty("role", "log-cap")
         layout.addWidget(log_cap)
 
+        org_log_toolbar = QHBoxLayout()
+        self._org_filter = QLineEdit()
+        self._org_filter.setPlaceholderText("Filter log…")
+        self._org_filter.setFixedHeight(28)
+        self._org_error_badge = QLabel("")
+        self._org_error_badge.setVisible(False)
+        self._org_error_badge.setStyleSheet("color:#f38ba8;font-weight:600;padding:0 6px")
+        self._org_copy_errors_btn = QPushButton("Copy Errors")
+        self._org_copy_errors_btn.setFixedHeight(28)
+        self._org_copy_errors_btn.clicked.connect(
+            lambda: self._copy_errors(self._org_log_lines)
+        )
+        org_log_toolbar.addWidget(self._org_filter)
+        org_log_toolbar.addWidget(self._org_error_badge)
+        org_log_toolbar.addWidget(self._org_copy_errors_btn)
+        layout.addLayout(org_log_toolbar)
+
         self.org_log = QTextEdit()
         self.org_log.setReadOnly(True)
         layout.addWidget(self.org_log)
+
+        self._org_filter.textChanged.connect(
+            lambda: self._rebuild_log(self.org_log, self._org_log_lines, self._org_filter)
+        )
 
         # Persist settings on every change
         self.src_edit.textChanged.connect(self._save_settings)
@@ -2162,7 +2238,7 @@ class MainWindow(QMainWindow):
         """Disconnect all signals from a worker so stale callbacks never fire."""
         if worker is None:
             return
-        for attr in ("log", "progress", "status_msg", "error", "finished"):
+        for attr in ("log", "progress", "magazine_progress", "status_msg", "error", "finished"):
             sig = getattr(worker.signals, attr, None)
             if sig is not None:
                 try:
@@ -2195,20 +2271,59 @@ class MainWindow(QMainWindow):
             self._dl_log("No progress cache file found.")
 
     @staticmethod
-    def _append_log(log: QTextEdit, msg: str, max_lines: int = 2000) -> None:
-        """Append a line, trim excess lines from the top, then scroll to bottom."""
-        log.append(msg)
-        doc = log.document()
-        excess = doc.blockCount() - max_lines
-        if excess > 0:
-            cur = QTextCursor(doc)
-            cur.movePosition(QTextCursor.Start)
-            cur.movePosition(QTextCursor.Down, QTextCursor.KeepAnchor, excess)
-            cur.removeSelectedText()
+    def _colorize(line: str) -> str:
+        """Return an HTML-colored version of a log line."""
+        esc = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if "FAILED" in line or "ERROR:" in line:
+            color = "#f38ba8"
+        elif "[corrupt]" in line:
+            color = "#fab387"
+        elif line.startswith("  [skip]") or line.startswith("[skip]") \
+                or line.startswith("  [exists]") or line.startswith("[exists]"):
+            color = "#45475a"
+        elif " → " in line or "Downloaded:" in line:
+            color = "#a6e3a1"
+        else:
+            color = "#a6adc8"
+        return f'<span style="color:{color}">{esc}</span>'
+
+    def _append_log(self, log: QTextEdit, msg: str,
+                    lines_buf: list, filter_edit: QLineEdit,
+                    badge_label: QLabel, max_lines: int = 2000) -> None:
+        lines_buf.append(msg)
+        if len(lines_buf) > max_lines:
+            lines_buf.pop(0)
+
+        error_count = sum(1 for l in lines_buf if "FAILED" in l or "ERROR:" in l)
+        if error_count > 0:
+            badge_label.setText(f"{error_count} error{'s' if error_count != 1 else ''}")
+            badge_label.setVisible(True)
+        else:
+            badge_label.setVisible(False)
+
+        filt = filter_edit.text().strip().lower()
+        if filt and filt not in msg.lower():
+            return
+        log.append(self._colorize(msg))
         log.verticalScrollBar().setValue(log.verticalScrollBar().maximum())
 
+    def _rebuild_log(self, log: QTextEdit, lines_buf: list, filter_edit: QLineEdit) -> None:
+        filt = filter_edit.text().strip().lower()
+        log.clear()
+        for line in lines_buf:
+            if filt and filt not in line.lower():
+                continue
+            log.append(self._colorize(line))
+        log.verticalScrollBar().setValue(log.verticalScrollBar().maximum())
+
+    def _copy_errors(self, lines_buf: list) -> None:
+        errors = [l for l in lines_buf if "FAILED" in l or "ERROR:" in l]
+        if errors:
+            QApplication.clipboard().setText("\n".join(errors))
+
     def _dl_log(self, msg: str):
-        self._append_log(self.dl_log, msg)
+        self._append_log(self.dl_log, msg,
+                         self._dl_log_lines, self._dl_filter, self._dl_error_badge)
 
     def _start_download(self):
         if self.worker is not None and self.worker.isRunning():
@@ -2232,16 +2347,44 @@ class MainWindow(QMainWindow):
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        self.dl_progress.setVisible(True)
-        self.dl_progress.setValue(0)
         self.status_label.setText("")
+
+        # Build per-magazine progress rows
+        prog_layout = self._progress_container.layout()
+        while prog_layout.count() > 1:
+            item = prog_layout.takeAt(1)
+            if item.widget():
+                item.widget().deleteLater()
+        self._mag_bar_rows = {}
+        for mag_name in magazines:
+            row_widget = QWidget()
+            row_layout = QVBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 2)
+            row_layout.setSpacing(2)
+            header = QHBoxLayout()
+            name_lbl = QLabel(mag_name)
+            count_lbl = QLabel("0 / ?")
+            count_lbl.setProperty("role", "muted")
+            header.addWidget(name_lbl)
+            header.addStretch()
+            header.addWidget(count_lbl)
+            bar = QProgressBar()
+            bar.setValue(0)
+            bar.setMaximum(1)
+            row_layout.addLayout(header)
+            row_layout.addWidget(bar)
+            prog_layout.addWidget(row_widget)
+            self._mag_bar_rows[mag_name] = (count_lbl, bar)
+        self._summary_label.setText("Starting…")
+        self._progress_container.setVisible(True)
 
         self._disconnect_worker(self.worker)
         self.worker = DownloadWorker(magazines, base_dir, headless, test, cookies, newest,
                                      include_specials=specials)
         self.worker.signals.log.connect(self._dl_log)
         self.worker.signals.progress.connect(self._update_progress)
-        self.worker.signals.status_msg.connect(self.status_label.setText)
+        self.worker.signals.magazine_progress.connect(self._update_mag_progress)
+        self.worker.signals.status_msg.connect(self._summary_label.setText)
         self.worker.signals.error.connect(self._on_error)
         self.worker.signals.finished.connect(self._on_finished)
         self.worker.start()
@@ -2252,10 +2395,16 @@ class MainWindow(QMainWindow):
             self._dl_log("Stop requested — waiting for current issue to finish…")
         self.stop_btn.setEnabled(False)
 
+    def _update_mag_progress(self, mag_name: str, done: int, total: int):
+        if mag_name not in self._mag_bar_rows:
+            return
+        count_lbl, bar = self._mag_bar_rows[mag_name]
+        bar.setMaximum(total)
+        bar.setValue(done)
+        count_lbl.setText(f"{done} / {total}")
+
     def _update_progress(self, current: int, total: int):
         if total > 0:
-            self.dl_progress.setMaximum(total)
-            self.dl_progress.setValue(current)
             self.status_label.setText(f"{current} / {total} issues")
 
     def _on_error(self, msg: str):
@@ -2265,7 +2414,7 @@ class MainWindow(QMainWindow):
     def _on_finished(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.dl_progress.setVisible(False)
+        self._progress_container.setVisible(False)
         self._dl_log("--- Done ---")
         self.status_label.setText("Done.")
 
@@ -2337,8 +2486,11 @@ class MainWindow(QMainWindow):
         hint = None if pfx_text == "Auto-detect" else pfx_text
 
         self.org_log.clear()
-        self._append_log(self.org_log, f"Organizing PDFs from: {src}")
-        self._append_log(self.org_log, f"                  to: {dst}\n")
+        self._org_log_lines.clear()
+        self._append_log(self.org_log, f"Organizing PDFs from: {src}",
+                         self._org_log_lines, self._org_filter, self._org_error_badge)
+        self._append_log(self.org_log, f"                  to: {dst}\n",
+                         self._org_log_lines, self._org_filter, self._org_error_badge)
 
         self.org_run_btn.setEnabled(False)
         self.dl_missing_btn.setEnabled(False)
@@ -2349,7 +2501,10 @@ class MainWindow(QMainWindow):
         self._org_dst  = dst
         self._disconnect_worker(self._org_worker)
         self._org_worker = OrganizeWorker(src, dst, hint)
-        self._org_worker.signals.log.connect(lambda m: self._append_log(self.org_log, m))
+        self._org_worker.signals.log.connect(
+            lambda m: self._append_log(self.org_log, m,
+                                       self._org_log_lines, self._org_filter, self._org_error_badge)
+        )
         self._org_worker.signals.progress.connect(self._update_org_progress)
         self._org_worker.signals.error.connect(
             lambda msg: QMessageBox.critical(self, "Organize error", msg)
@@ -2365,9 +2520,11 @@ class MainWindow(QMainWindow):
             return  # an error was emitted; nothing to summarize
         moved, already_correct, unrecognized, metadata_stamped, report = self._org_worker.result
 
-        self._append_log(self.org_log, f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --")
+        self._append_log(self.org_log, f"\n-- {moved} moved, {already_correct} already correct, {unrecognized} unrecognized, {metadata_stamped} metadata updated --",
+                         self._org_log_lines, self._org_filter, self._org_error_badge)
         for line in report:
-            self._append_log(self.org_log, line)
+            self._append_log(self.org_log, line,
+                             self._org_log_lines, self._org_filter, self._org_error_badge)
 
         hint = self._org_hint
         dst  = self._org_dst
@@ -2398,7 +2555,8 @@ class MainWindow(QMainWindow):
             total = sum(len(v) for v in self._missing_by_year.values())
             self._append_log(
                 self.org_log,
-                f"\n{total} missing issue(s) found — click 'Download Missing Issues' to fetch them."
+                f"\n{total} missing issue(s) found — click 'Download Missing Issues' to fetch them.",
+                self._org_log_lines, self._org_filter, self._org_error_badge
             )
 
     def _start_missing_download(self):
@@ -2431,7 +2589,10 @@ class MainWindow(QMainWindow):
             cookies_path=cookies,
             headless=headless,
         )
-        self._missing_worker.signals.log.connect(lambda m: self._append_log(self.org_log, m))
+        self._missing_worker.signals.log.connect(
+            lambda m: self._append_log(self.org_log, m,
+                                       self._org_log_lines, self._org_filter, self._org_error_badge)
+        )
         self._missing_worker.signals.progress.connect(self._update_org_progress)
         self._missing_worker.signals.error.connect(
             lambda msg: QMessageBox.critical(self, "Error", msg)
@@ -2442,7 +2603,8 @@ class MainWindow(QMainWindow):
     def _stop_missing_download(self):
         if self._missing_worker is not None and self._missing_worker.isRunning():
             self._missing_worker.stop()
-            self._append_log(self.org_log, "Stop requested…")
+            self._append_log(self.org_log, "Stop requested…",
+                             self._org_log_lines, self._org_filter, self._org_error_badge)
         self.dl_missing_stop_btn.setEnabled(False)
 
     def _update_org_progress(self, current: int, total: int):
@@ -2456,7 +2618,8 @@ class MainWindow(QMainWindow):
         self.dl_missing_btn.setEnabled(has_missing)
         self.dl_missing_stop_btn.setEnabled(False)
         self.org_progress.setVisible(False)
-        self._append_log(self.org_log, "--- Download complete ---")
+        self._append_log(self.org_log, "--- Download complete ---",
+                         self._org_log_lines, self._org_filter, self._org_error_badge)
 
 
 # ------------------------------------------------------------------------------
