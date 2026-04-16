@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -71,31 +71,10 @@ jobs:
         if: runner.os != 'Windows'
         run: zip ${{ matrix.artifact }} dist/TrainsDownloader
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-          retention-days: 1
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Read version
         id: version
+        shell: bash
         run: echo "version=$(python -c "import re; print(re.search(r'APP_VERSION\s*=\s*\"([^\"]+)\"', open('trains_app.py').read()).group(1))")" >> "$GITHUB_OUTPUT"
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
 
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
@@ -103,10 +82,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
           prerelease: false
-          files: |
-            TrainsDownloader-windows.zip
-            TrainsDownloader-linux.zip
-            TrainsDownloader-macos.zip
+          files: ${{ matrix.artifact }}
           body: |
             Automatically built from the latest commit on `main`.
 
