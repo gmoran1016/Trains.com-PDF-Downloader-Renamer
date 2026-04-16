@@ -30,11 +30,9 @@ except ImportError:
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog, QTextEdit,
-    QProgressBar, QGroupBox, QGridLayout, QComboBox, QMessageBox,
-    QTabWidget, QFrame, QSizePolicy, QMenu, QSystemTrayIcon,
+    QProgressBar, QComboBox, QMessageBox, QMenu, QSystemTrayIcon,
 )
 from PyQt5.QtCore import pyqtSignal, QObject, QThread
-from PyQt5.QtGui import QTextCursor
 
 # ------------------------------------------------------------------------------
 # Base directory — next to the .exe when frozen, next to the script otherwise
@@ -1904,19 +1902,15 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Trains.com Magazine Downloader & Organizer v{APP_VERSION}")
-        self.resize(960, 780)
-        self.setMinimumSize(720, 560)
-        # Workers — initialised here so slots never raise AttributeError
+        self.resize(860, 720)
+        self.setMinimumSize(640, 520)
         self.worker:           DownloadWorker | None      = None
         self._org_worker:      OrganizeWorker | None      = None
         self._missing_worker:  MissingIssuesWorker | None = None
-        # Organizer state
         self._org_hint:        str | None                 = None
         self._org_dst:         str                        = ""
         self._org_prefix:      str | None                 = None
         self._missing_by_year: dict[str, list[str]]       = {}
-        self._dl_log_lines:  list[str] = []
-        self._org_log_lines: list[str] = []
         self._build_ui()
         self._load_settings()
         self._setup_tray()
@@ -1924,101 +1918,146 @@ class MainWindow(QMainWindow):
     # -- UI construction ------------------------------------------------------
     def _build_ui(self):
         self.setStyleSheet(_STYLESHEET)
-        tabs = QTabWidget()
-        tabs.setDocumentMode(True)
-        self.setCentralWidget(tabs)
-        tabs.addTab(self._make_download_tab(), "  Download  ")
-        tabs.addTab(self._make_organize_tab(), "  Organize  ")
-
-    def _make_download_tab(self) -> QWidget:
-        w = QWidget()
-        w.setObjectName("tab_content")
-        layout = QVBoxLayout(w)
+        root = QWidget()
+        self.setCentralWidget(root)
+        layout = QVBoxLayout(root)
         layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(0)
+
+        # ── Mode toggle ──────────────────────────────────────────────────────
+        toggle_row = QHBoxLayout()
+        toggle_row.setSpacing(2)
+        toggle_row.setContentsMargins(0, 0, 0, 0)
+        self._dl_mode_btn  = QPushButton("  Download  ")
+        self._org_mode_btn = QPushButton("  Organize  ")
+        for btn in (self._dl_mode_btn, self._org_mode_btn):
+            btn.setProperty("role", "mode")
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+        self._dl_mode_btn.setChecked(True)
+        self._dl_mode_btn.clicked.connect(lambda: self._switch_mode("download"))
+        self._org_mode_btn.clicked.connect(lambda: self._switch_mode("organize"))
+        toggle_row.addWidget(self._dl_mode_btn)
+        toggle_row.addWidget(self._org_mode_btn)
+        toggle_row.addStretch()
+        layout.addLayout(toggle_row)
+
+        # ── Stacked mode panels ──────────────────────────────────────────────
+        self._dl_panel  = self._make_download_panel()
+        self._org_panel = self._make_organize_panel()
+        for panel in (self._dl_panel, self._org_panel):
+            panel.setObjectName("mode_panel")
+            layout.addWidget(panel)
+        self._org_panel.setVisible(False)
+
+        layout.addSpacing(8)
+
+        # ── Shared auth row ──────────────────────────────────────────────────
+        auth_row = QWidget()
+        auth_row.setObjectName("auth_row")
+        auth_layout = QHBoxLayout(auth_row)
+        auth_layout.setContentsMargins(12, 8, 12, 8)
+        auth_layout.setSpacing(8)
+        cookie_lbl = QLabel("COOKIE FILE")
+        cookie_lbl.setProperty("role", "section")
+        self.cookie_edit = QLineEdit(DEFAULT_COOKIES_FILE)
+        cookie_browse = QPushButton("Browse…")
+        cookie_browse.setFixedWidth(80)
+        cookie_browse.clicked.connect(self._browse_cookies)
+        self.org_headless_cb = QCheckBox("Headless browser")
+        auth_layout.addWidget(cookie_lbl)
+        auth_layout.addWidget(self.cookie_edit)
+        auth_layout.addWidget(cookie_browse)
+        auth_layout.addWidget(self.org_headless_cb)
+        layout.addWidget(auth_row)
+
+        layout.addSpacing(8)
+
+        # ── Progress ─────────────────────────────────────────────────────────
+        prog_row = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.status_label = QLabel("")
+        self.status_label.setProperty("role", "status")
+        prog_row.addWidget(self.progress_bar)
+        prog_row.addWidget(self.status_label)
+        layout.addLayout(prog_row)
+
+        layout.addSpacing(4)
+
+        # ── Log ──────────────────────────────────────────────────────────────
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        layout.addWidget(self.log)
+
+        self.cookie_edit.textChanged.connect(self._save_settings)
+        self.org_headless_cb.stateChanged.connect(self._save_settings)
+
+    def _switch_mode(self, mode: str):
+        self._dl_panel.setVisible(mode == "download")
+        self._org_panel.setVisible(mode == "organize")
+
+    def _make_download_panel(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # ── Magazines ─────────────────────────────────────────────────────────
-        mag_box = QGroupBox("Magazines")
-        mag_grid = QGridLayout(mag_box)
-        mag_grid.setHorizontalSpacing(20)
-        self.mag_checks: dict[str, QCheckBox] = {}
-        for i, name in enumerate(MAGAZINES):
-            cb = QCheckBox(name)
-            cb.setChecked(True)
-            self.mag_checks[name] = cb
-            mag_grid.addWidget(cb, i // 3, i % 3)
-        layout.addWidget(mag_box)
+        # ── Magazines ────────────────────────────────────────────────────────
+        mag_lbl = QLabel("MAGAZINES")
+        mag_lbl.setProperty("role", "section")
+        layout.addWidget(mag_lbl)
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(6)
+        self.mag_chips: dict[str, QPushButton] = {}
+        for name in MAGAZINES:
+            btn = QPushButton(name)
+            btn.setProperty("role", "chip")
+            btn.setCheckable(True)
+            btn.setChecked(True)
+            btn.toggled.connect(self._save_settings)
+            self.mag_chips[name] = btn
+            chips_row.addWidget(btn)
+        chips_row.addStretch()
+        layout.addLayout(chips_row)
 
-        # ── Save location ──────────────────────────────────────────────────────
-        save_box = QGroupBox("Save Location")
-        save_box.setProperty("accent", "teal")
-        save_layout = QVBoxLayout(save_box)
+        # ── Save location ─────────────────────────────────────────────────────
+        save_lbl = QLabel("SAVE LOCATION")
+        save_lbl.setProperty("role", "section")
+        layout.addWidget(save_lbl)
         save_row = QHBoxLayout()
-        self.dir_edit = QLineEdit(
-            str(Path.home() / "Downloads" / "TrainsMagazines")
-        )
+        save_row.setSpacing(6)
+        self.dir_edit = QLineEdit(str(Path.home() / "Downloads" / "TrainsMagazines"))
         browse_btn = QPushButton("Browse…")
-        browse_btn.setFixedWidth(90)
+        browse_btn.setFixedWidth(80)
         browse_btn.clicked.connect(self._browse_dir)
         save_row.addWidget(self.dir_edit)
         save_row.addWidget(browse_btn)
-        save_layout.addLayout(save_row)
-        layout.addWidget(save_box)
+        layout.addLayout(save_row)
 
-        # ── Authentication ─────────────────────────────────────────────────────
-        cookie_box = QGroupBox("Authentication")
-        cookie_box.setProperty("accent", "purple")
-        cookie_col = QVBoxLayout(cookie_box)
-        cookie_row = QHBoxLayout()
-        self.cookie_edit = QLineEdit(DEFAULT_COOKIES_FILE)
-        cookie_browse = QPushButton("Browse…")
-        cookie_browse.setFixedWidth(90)
-        cookie_browse.clicked.connect(self._browse_cookies)
-        cookie_row.addWidget(self.cookie_edit)
-        cookie_row.addWidget(cookie_browse)
-        cookie_col.addLayout(cookie_row)
-        cookie_hint = QLabel(
-            "Leave blank to log in manually each run, or select an existing .json cookie file."
-        )
-        cookie_hint.setWordWrap(True)
-        cookie_hint.setProperty("role", "muted")
-        cookie_col.addWidget(cookie_hint)
-        layout.addWidget(cookie_box)
-
-        # ── Options ────────────────────────────────────────────────────────────
-        opts_box = QGroupBox("Options")
-        opts_box.setProperty("accent", "green")
-        opts_layout = QVBoxLayout(opts_box)
-        opts_layout.setSpacing(8)
-
-        check_row = QHBoxLayout()
-        self.headless_cb = QCheckBox("Headless mode")
+        # ── Options ───────────────────────────────────────────────────────────
+        opts_lbl = QLabel("OPTIONS")
+        opts_lbl.setProperty("role", "section")
+        layout.addWidget(opts_lbl)
+        opts_row = QHBoxLayout()
+        opts_row.setSpacing(16)
+        self.headless_cb = QCheckBox("Headless")
         self.headless_cb.setToolTip(
             "Run without a visible browser window.\nRequires a valid saved cookie file."
         )
-        self.test_cb     = QCheckBox("Test mode (3 issues only)")
-        self.specials_cb = QCheckBox("Include special issues")
+        self.test_cb = QCheckBox("Test mode")
+        self.specials_cb = QCheckBox("Special issues")
         self.specials_cb.setChecked(True)
-        check_row.addWidget(self.headless_cb)
-        check_row.addWidget(self.test_cb)
-        check_row.addWidget(self.specials_cb)
-        check_row.addStretch()
-        opts_layout.addLayout(check_row)
-
-        sort_row = QHBoxLayout()
-        sort_lbl = QLabel("Download order:")
-        sort_lbl.setFixedWidth(110)
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Newest first", "Oldest first"])
-        self.sort_combo.setFixedWidth(140)
-        sort_row.addWidget(sort_lbl)
-        sort_row.addWidget(self.sort_combo)
-        sort_row.addStretch()
-        opts_layout.addLayout(sort_row)
+        self.sort_combo.setFixedWidth(130)
+        for widget in (self.headless_cb, self.test_cb, self.specials_cb):
+            opts_row.addWidget(widget)
+        opts_row.addWidget(self.sort_combo)
+        opts_row.addStretch()
+        layout.addLayout(opts_row)
 
-        layout.addWidget(opts_box)
-
-        # ── Action bar ─────────────────────────────────────────────────────────
+        # ── Actions ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         self.start_btn = QPushButton("▶  Start Download")
@@ -2028,213 +2067,94 @@ class MainWindow(QMainWindow):
         self.stop_btn.setProperty("role", "danger")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_download)
-        clear_btn = QPushButton("Clear Progress Cache")
-        clear_btn.clicked.connect(self._clear_progress)
-        btn_row.addWidget(self.start_btn)
-        btn_row.addWidget(self.stop_btn)
-        btn_row.addWidget(clear_btn)
-        btn_row.addStretch()
+        self._clear_btn = QPushButton("Clear Cache")
+        self._clear_btn.clicked.connect(self._clear_progress)
+        btn_row.addWidget(self.start_btn, 2)
+        btn_row.addWidget(self.stop_btn, 1)
+        btn_row.addWidget(self._clear_btn, 1)
         layout.addLayout(btn_row)
 
-        # ── Progress / status ──────────────────────────────────────────────────
-        # Progress container — holds one bar per magazine + summary label
-        self._progress_container = QWidget()
-        self._progress_container.setVisible(False)
-        prog_layout = QVBoxLayout(self._progress_container)
-        prog_layout.setContentsMargins(0, 0, 0, 0)
-        prog_layout.setSpacing(6)
-        self._mag_bar_rows: dict[str, tuple] = {}  # mag_name → (count_label, QProgressBar)
-        self._summary_label = QLabel("")
-        self._summary_label.setProperty("role", "status")
-        prog_layout.addWidget(self._summary_label)
-        layout.addWidget(self._progress_container)
+        layout.addStretch()
 
-        status_row = QHBoxLayout()
-        self.status_label = QLabel("")
-        self.status_label.setProperty("role", "status")
-        status_row.addWidget(self.status_label)
-        status_row.addStretch()
-        layout.addLayout(status_row)
-
-        # ── Log ────────────────────────────────────────────────────────────────
-        log_cap = QLabel("DOWNLOAD LOG")
-        log_cap.setProperty("role", "log-cap")
-        layout.addWidget(log_cap)
-
-        log_toolbar = QHBoxLayout()
-        self._dl_filter = QLineEdit()
-        self._dl_filter.setPlaceholderText("Filter log…")
-        self._dl_filter.setFixedHeight(28)
-        self._dl_error_badge = QLabel("")
-        self._dl_error_badge.setVisible(False)
-        self._dl_error_badge.setStyleSheet("color:#f38ba8;font-weight:600;padding:0 6px")
-        self._dl_copy_errors_btn = QPushButton("Copy Errors")
-        self._dl_copy_errors_btn.setFixedHeight(28)
-        self._dl_copy_errors_btn.clicked.connect(
-            lambda: self._copy_errors(self._dl_log_lines)
-        )
-        log_toolbar.addWidget(self._dl_filter)
-        log_toolbar.addWidget(self._dl_error_badge)
-        log_toolbar.addWidget(self._dl_copy_errors_btn)
-        layout.addLayout(log_toolbar)
-
-        self.dl_log = QTextEdit()
-        self.dl_log.setReadOnly(True)
-        layout.addWidget(self.dl_log)
-
-        self._dl_filter.textChanged.connect(
-            lambda: self._rebuild_log(self.dl_log, self._dl_log_lines, self._dl_filter)
-        )
-
-        # Persist settings on every change
         self.dir_edit.textChanged.connect(self._save_settings)
-        self.cookie_edit.textChanged.connect(self._save_settings)
         self.headless_cb.stateChanged.connect(self._save_settings)
         self.test_cb.stateChanged.connect(self._save_settings)
         self.specials_cb.stateChanged.connect(self._save_settings)
         self.sort_combo.currentIndexChanged.connect(self._save_settings)
-        for cb in self.mag_checks.values():
-            cb.stateChanged.connect(self._save_settings)
 
         return w
 
-    def _make_organize_tab(self) -> QWidget:
+    def _make_organize_panel(self) -> QWidget:
         w = QWidget()
-        w.setObjectName("tab_content")
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        # ── Folders ────────────────────────────────────────────────────────────
-        folders_box = QGroupBox("Folders")
-        folders_box.setProperty("accent", "teal")
-        folders_layout = QVBoxLayout(folders_box)
-        folders_layout.setSpacing(8)
-
+        # ── Source ───────────────────────────────────────────────────────────
+        src_lbl = QLabel("SOURCE FOLDER")
+        src_lbl.setProperty("role", "section")
+        layout.addWidget(src_lbl)
         src_row = QHBoxLayout()
-        src_lbl = QLabel("Source:")
-        src_lbl.setFixedWidth(72)
+        src_row.setSpacing(6)
         self.src_edit = QLineEdit()
         self.src_edit.setPlaceholderText("Folder containing PDFs to organize…")
         src_browse = QPushButton("Browse…")
-        src_browse.setFixedWidth(90)
+        src_browse.setFixedWidth(80)
         src_browse.clicked.connect(lambda: self._pick_dir(self.src_edit))
-        src_row.addWidget(src_lbl)
         src_row.addWidget(self.src_edit)
         src_row.addWidget(src_browse)
-        folders_layout.addLayout(src_row)
+        layout.addLayout(src_row)
 
+        # ── Destination ──────────────────────────────────────────────────────
+        dst_lbl = QLabel("DESTINATION FOLDER")
+        dst_lbl.setProperty("role", "section")
+        layout.addWidget(dst_lbl)
         dst_row = QHBoxLayout()
-        dst_lbl = QLabel("Destination:")
-        dst_lbl.setFixedWidth(72)
+        dst_row.setSpacing(6)
         self.dst_edit = QLineEdit()
-        self.dst_edit.setPlaceholderText("Folder for organized output (can be same as source)…")
+        self.dst_edit.setPlaceholderText("Organized output folder (can be same as source)…")
         dst_browse = QPushButton("Browse…")
-        dst_browse.setFixedWidth(90)
+        dst_browse.setFixedWidth(80)
         dst_browse.clicked.connect(lambda: self._pick_dir(self.dst_edit))
-        dst_row.addWidget(dst_lbl)
         dst_row.addWidget(self.dst_edit)
         dst_row.addWidget(dst_browse)
-        folders_layout.addLayout(dst_row)
+        layout.addLayout(dst_row)
 
-        prefix_row = QHBoxLayout()
-        prefix_lbl = QLabel("Prefix:")
-        prefix_lbl.setFixedWidth(72)
+        # ── Prefix ───────────────────────────────────────────────────────────
+        pfx_lbl = QLabel("MAGAZINE PREFIX")
+        pfx_lbl.setProperty("role", "section")
+        layout.addWidget(pfx_lbl)
         self.prefix_combo = QComboBox()
         self.prefix_combo.addItem("Auto-detect")
         for info in MAGAZINES.values():
             self.prefix_combo.addItem(info["prefix"])
         self.prefix_combo.setFixedWidth(140)
         self.prefix_combo.setToolTip("Force a specific magazine prefix when auto-detect fails")
-        prefix_row.addWidget(prefix_lbl)
-        prefix_row.addWidget(self.prefix_combo)
-        prefix_row.addStretch()
-        folders_layout.addLayout(prefix_row)
+        layout.addWidget(self.prefix_combo)
 
-        layout.addWidget(folders_box)
-
-        # ── Organize action ────────────────────────────────────────────────────
-        org_btn_row = QHBoxLayout()
-        self.org_run_btn = QPushButton("▶  Organize PDFs")
-        self.org_run_btn.setProperty("role", "primary")
-        self.org_run_btn.clicked.connect(self._run_organize)
-        org_btn_row.addWidget(self.org_run_btn)
-        org_btn_row.addStretch()
-        layout.addLayout(org_btn_row)
-
-        # ── Authentication (for missing-issues download) ───────────────────────
-        cookie_box = QGroupBox("Authentication")
-        cookie_box.setProperty("accent", "purple")
-        cookie_col = QVBoxLayout(cookie_box)
-        cookie_row = QHBoxLayout()
-        self.org_cookie_edit = QLineEdit()
-        self.org_cookie_edit.setPlaceholderText("session_cookies.json (required to download missing issues)")
-        org_cookie_browse = QPushButton("Browse…")
-        org_cookie_browse.setFixedWidth(90)
-        org_cookie_browse.clicked.connect(self._browse_org_cookies)
-        self.org_headless_cb = QCheckBox("Headless browser")
-        cookie_row.addWidget(self.org_cookie_edit)
-        cookie_row.addWidget(org_cookie_browse)
-        cookie_row.addWidget(self.org_headless_cb)
-        cookie_col.addLayout(cookie_row)
-        layout.addWidget(cookie_box)
-
-        # ── Download missing ───────────────────────────────────────────────────
-        missing_btn_row = QHBoxLayout()
-        missing_btn_row.setSpacing(8)
-        self.dl_missing_btn = QPushButton("⬇  Download Missing Issues")
-        self.dl_missing_btn.setProperty("role", "primary")
+        # ── Actions ───────────────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        self.org_btn = QPushButton("▶  Organize PDFs")
+        self.org_btn.setProperty("role", "primary")
+        self.org_btn.clicked.connect(self._run_organize)
+        self.dl_missing_btn = QPushButton("⬇  Download Missing")
         self.dl_missing_btn.setEnabled(False)
         self.dl_missing_btn.clicked.connect(self._start_missing_download)
         self.dl_missing_stop_btn = QPushButton("■  Stop")
         self.dl_missing_stop_btn.setProperty("role", "danger")
         self.dl_missing_stop_btn.setEnabled(False)
         self.dl_missing_stop_btn.clicked.connect(self._stop_missing_download)
-        missing_btn_row.addWidget(self.dl_missing_btn)
-        missing_btn_row.addWidget(self.dl_missing_stop_btn)
-        missing_btn_row.addStretch()
-        layout.addLayout(missing_btn_row)
+        btn_row.addWidget(self.org_btn, 2)
+        btn_row.addWidget(self.dl_missing_btn, 2)
+        btn_row.addWidget(self.dl_missing_stop_btn, 1)
+        layout.addLayout(btn_row)
 
-        # ── Progress / log ─────────────────────────────────────────────────────
-        self.org_progress = QProgressBar()
-        self.org_progress.setVisible(False)
-        layout.addWidget(self.org_progress)
+        layout.addStretch()
 
-        log_cap = QLabel("ORGANIZE LOG")
-        log_cap.setProperty("role", "log-cap")
-        layout.addWidget(log_cap)
-
-        org_log_toolbar = QHBoxLayout()
-        self._org_filter = QLineEdit()
-        self._org_filter.setPlaceholderText("Filter log…")
-        self._org_filter.setFixedHeight(28)
-        self._org_error_badge = QLabel("")
-        self._org_error_badge.setVisible(False)
-        self._org_error_badge.setStyleSheet("color:#f38ba8;font-weight:600;padding:0 6px")
-        self._org_copy_errors_btn = QPushButton("Copy Errors")
-        self._org_copy_errors_btn.setFixedHeight(28)
-        self._org_copy_errors_btn.clicked.connect(
-            lambda: self._copy_errors(self._org_log_lines)
-        )
-        org_log_toolbar.addWidget(self._org_filter)
-        org_log_toolbar.addWidget(self._org_error_badge)
-        org_log_toolbar.addWidget(self._org_copy_errors_btn)
-        layout.addLayout(org_log_toolbar)
-
-        self.org_log = QTextEdit()
-        self.org_log.setReadOnly(True)
-        layout.addWidget(self.org_log)
-
-        self._org_filter.textChanged.connect(
-            lambda: self._rebuild_log(self.org_log, self._org_log_lines, self._org_filter)
-        )
-
-        # Persist settings on every change
         self.src_edit.textChanged.connect(self._save_settings)
         self.dst_edit.textChanged.connect(self._save_settings)
         self.prefix_combo.currentIndexChanged.connect(self._save_settings)
-        self.org_cookie_edit.textChanged.connect(self._save_settings)
-        self.org_headless_cb.stateChanged.connect(self._save_settings)
 
         return w
 
