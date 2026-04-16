@@ -375,7 +375,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 ALL_MONTHS = list(month_name)[1:]
 # Full magazine names keyed by the file prefix used throughout this tool
 PREFIX_TO_TITLE: dict[str, str] = {
