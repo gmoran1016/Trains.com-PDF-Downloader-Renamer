@@ -193,6 +193,57 @@ def save_settings(data: dict, path: str = SETTINGS_FILE) -> None:
         logger.error(f"Failed to save settings: {e}")
 
 
+def _verify_pdf(path: str) -> bool:
+    """Return True if the PDF at path appears valid (size + parseable)."""
+    try:
+        if os.path.getsize(path) < 512:
+            return False
+    except OSError:
+        return False
+    if not _PYPDF_AVAILABLE:
+        return True
+    try:
+        with open(path, "rb") as f:
+            reader = pypdf.PdfReader(io.BytesIO(f.read()))
+            return len(reader.pages) > 0
+    except Exception:
+        return False
+
+
+def rename_and_move(src_path: str, dest_dir: str, hint_prefix: str | None,
+                    flat: bool, log_fn) -> tuple[bool, str]:
+    """
+    Rename src_path per naming convention, move into dest_dir (or dest_dir/YYYY/),
+    stamp metadata, verify integrity.
+    Returns (True, dest_path) on success or (False, reason) on failure.
+    """
+    parsed = parse_pdf_filename(src_path, hint_prefix)
+    if parsed:
+        new_stem, year, mname = parsed
+        target_dir = dest_dir if flat else os.path.join(dest_dir, year)
+        os.makedirs(target_dir, exist_ok=True)
+        dest = _unique_path(os.path.join(target_dir, new_stem + ".pdf"))
+    else:
+        mname = year = None
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = _unique_path(os.path.join(dest_dir, os.path.basename(src_path)))
+
+    shutil.move(src_path, dest)
+    if year:
+        _stamp_pdf_metadata(dest, mname, year, warn_fn=log_fn)
+
+    if not _verify_pdf(dest):
+        log_fn(f"  [corrupt] {os.path.basename(dest)} — deleted, will retry")
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
+        return False, "corrupt"
+
+    log_fn(f"  → {dest}")
+    return True, dest
+
+
 def issue_already_on_disk(issue_url: str, dest_dir: str, prefix: str, flat: bool) -> bool:
     """
     Return True if the PDF for this issue URL already exists in dest_dir.
@@ -1045,8 +1096,7 @@ class MagazineDownloader:
             if new_files:
                 new_path = os.path.join(self.download_dir, next(iter(new_files)))
                 time.sleep(1)  # ensure file is fully written
-                dest_path = self._rename_and_move(new_path, dest_dir, hint_prefix, flat=flat)
-                return True, dest_path
+                return self._rename_and_move(new_path, dest_dir, hint_prefix, flat=flat)
             time.sleep(1.5)
 
         return False, "Flipbook download timed out (no file appeared within 90s)"
@@ -1079,9 +1129,10 @@ class MagazineDownloader:
                 for chunk in r.iter_content(chunk_size=65536):
                     f.write(chunk)
 
-            dest_path = self._rename_and_move(tmp_path, dest_dir, hint_prefix, flat=flat)
-            tmp_path = None  # successfully moved — nothing to clean up
-            return True, dest_path
+            ok, result = self._rename_and_move(tmp_path, dest_dir, hint_prefix, flat=flat)
+            if ok:
+                tmp_path = None  # successfully moved — nothing to clean up
+            return ok, result
 
         except Exception as e:
             if tmp_path and os.path.exists(tmp_path):
@@ -1092,28 +1143,8 @@ class MagazineDownloader:
             return False, f"HTTP download failed: {e}"
 
     def _rename_and_move(self, src_path: str, dest_dir: str, hint_prefix: str | None,
-                         flat: bool = False) -> str:
-        """
-        Rename src_path according to our naming convention and move it into
-        dest_dir/YYYY/  (or dest_dir/ if the year can't be determined or flat=True).
-        flat=True keeps all files directly in dest_dir regardless of year.
-        """
-        parsed = parse_pdf_filename(src_path, hint_prefix)
-        if parsed:
-            new_stem, year, mname = parsed
-            target_dir = dest_dir if flat else os.path.join(dest_dir, year)
-            os.makedirs(target_dir, exist_ok=True)
-            dest = _unique_path(os.path.join(target_dir, new_stem + ".pdf"))
-        else:
-            mname = year = None
-            os.makedirs(dest_dir, exist_ok=True)
-            dest = _unique_path(os.path.join(dest_dir, os.path.basename(src_path)))
-
-        shutil.move(src_path, dest)
-        if year:
-            _stamp_pdf_metadata(dest, mname, year, warn_fn=self._log)
-        self._log(f"  → {dest}")
-        return dest
+                         flat: bool = False) -> tuple[bool, str]:
+        return rename_and_move(src_path, dest_dir, hint_prefix, flat, self._log)
 
 
 # ------------------------------------------------------------------------------

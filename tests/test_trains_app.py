@@ -51,9 +51,13 @@ def _make_valid_pdf_bytes() -> bytes:
     import pypdf
     buf = io.BytesIO()
     writer = pypdf.PdfWriter()
-    writer.add_blank_page(width=612, height=792)
+    # Add enough pages to exceed the 512-byte minimum size check
+    for _ in range(10):
+        writer.add_blank_page(width=612, height=792)
     writer.write(buf)
-    return buf.getvalue()
+    data = buf.getvalue()
+    assert len(data) >= 512, f"Test PDF too small: {len(data)} bytes"
+    return data
 
 
 def test_verify_pdf_rejects_too_small(tmp_path):
