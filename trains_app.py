@@ -30,10 +30,10 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog, QTextEdit,
     QProgressBar, QGroupBox, QGridLayout, QComboBox, QMessageBox,
-    QTabWidget,
+    QTabWidget, QFrame, QSizePolicy,
 )
 from PyQt5.QtCore import pyqtSignal, QObject, QThread
-from PyQt5.QtGui import QFont, QTextCursor
+from PyQt5.QtGui import QTextCursor
 
 # ------------------------------------------------------------------------------
 # Base directory — next to the .exe when frozen, next to the script otherwise
@@ -200,7 +200,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 ALL_MONTHS = list(month_name)[1:]
 # Full magazine names keyed by the file prefix used throughout this tool
 PREFIX_TO_TITLE: dict[str, str] = {
@@ -589,7 +589,6 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
     issues_by_year: dict[str, set] = {}
     observed_prefixes: set[str] = set()
     moved = already_correct = unrecognized = metadata_stamped = 0
-    _diag_done = False  # log existing title of first file once for diagnostics
 
     for file_idx, (root, fname) in enumerate(all_pdfs):
         fpath = os.path.join(root, fname)
@@ -611,15 +610,6 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
             actual_dir == expected_dir
             and re.fullmatch(re.escape(new_stem) + r"-\d+", fname_stem, re.IGNORECASE)
         )
-        if not _diag_done:
-            try:
-                import io as _io, pypdf as _pypdf
-                with open(fpath, "rb") as _f:
-                    _existing_title = (_pypdf.PdfReader(_io.BytesIO(_f.read())).metadata or {}).get("/Title", "<not set>")
-                _log(f"  [diag] existing /Title in {fname!r}: {_existing_title!r}")
-            except Exception as _e:
-                _log(f"  [diag] could not read title from {fname!r}: {_e}")
-            _diag_done = True
         if is_duplicate_variant or os.path.normcase(os.path.abspath(fpath)) == os.path.normcase(os.path.abspath(expected_path)):
             if mname:
                 issues_by_year.setdefault(year, set()).add(mname)
@@ -840,7 +830,10 @@ class MagazineDownloader:
 
             new = [l for l in page_links if l not in all_links]
             if not new:
-                self._log(f"  No more issues after page {page_num - 1} -- done.")
+                if page_num == 1:
+                    self._log("  No issues found on page 1 -- done.")
+                else:
+                    self._log(f"  No more issues after page {page_num - 1} -- done.")
                 break
             all_links.extend(new)
             self._log(f"  Page {page_num}: {len(new)} issues ({len(all_links)} total)")
@@ -1520,186 +1513,199 @@ class MissingIssuesWorker(QThread):
 # ------------------------------------------------------------------------------
 _STYLESHEET = """
 /* ── Base ─────────────────────────────────────────────────────────────── */
-QMainWindow, QWidget {
-    background-color: #1e1e2e;
-    color: #cdd6f4;
-    font-family: "Segoe UI", system-ui, sans-serif;
-    font-size: 10pt;
+QMainWindow, QDialog { background-color: #13131f; }
+QWidget { color: #cdd6f4; font-family: "Segoe UI", system-ui, sans-serif; font-size: 10pt; background-color: transparent; }
+
+/* ── Header banner ────────────────────────────────────────────────────── */
+QWidget#header {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #1a1a2e, stop:0.6 #1e1e2e, stop:1 #1a1a2e);
+    border-bottom: 1px solid #2d2d45;
 }
 
-/* ── Tabs ─────────────────────────────────────────────────────────────── */
-QTabWidget::pane {
-    border: 1px solid #313244;
-    border-radius: 6px;
-    top: -1px;
-}
+/* ── Tab widget ───────────────────────────────────────────────────────── */
+QTabWidget::pane { border: none; background: #1a1a2a; top: 0; }
+QTabBar { background: #13131f; }
 QTabBar::tab {
-    background: #181825;
-    color: #6c7086;
-    padding: 8px 24px;
-    margin-right: 2px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    border: 1px solid #313244;
-    border-bottom: none;
-}
-QTabBar::tab:selected {
-    background: #1e1e2e;
-    color: #cdd6f4;
-    border-bottom: 2px solid #89b4fa;
-}
-QTabBar::tab:hover:!selected { background: #313244; color: #cdd6f4; }
-
-/* ── Group boxes ──────────────────────────────────────────────────────── */
-QGroupBox {
-    border: 1px solid #313244;
-    border-radius: 6px;
-    margin-top: 10px;
-    padding: 10px 8px 8px 8px;
+    background: #13131f;
+    color: #585b70;
+    padding: 12px 32px;
     font-weight: 600;
-    color: #89b4fa;
+    border-bottom: 3px solid transparent;
+    margin-right: 0;
+}
+QTabBar::tab:selected   { color: #cdd6f4; background: #1a1a2a; border-bottom-color: #89b4fa; }
+QTabBar::tab:hover:!selected { color: #a6adc8; background: #181826; border-bottom-color: #45475a; }
+
+/* ── Scroll area / content pane ──────────────────────────────────────── */
+QWidget#tab_content { background: #1a1a2a; }
+
+/* ── Cards (group boxes) ─────────────────────────────────────────────── */
+QGroupBox {
+    background: #1e1e2e;
+    border: 1px solid #2a2a3e;
+    border-left: 3px solid #89b4fa;
+    border-radius: 8px;
+    margin-top: 16px;
+    padding: 12px 14px 10px 14px;
+    font-weight: 700;
+    font-size: 8.5pt;
+    color: #7287b8;
+    letter-spacing: 0.08em;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
-    left: 10px;
-    padding: 0 5px;
+    left: 14px;
+    padding: 1px 6px;
+    background: #1e1e2e;
+    text-transform: uppercase;
 }
+QGroupBox[accent="purple"] { border-left-color: #cba6f7; }
+QGroupBox[accent="purple"]::title { color: #9a7fc7; }
+QGroupBox[accent="green"]  { border-left-color: #a6e3a1; }
+QGroupBox[accent="green"]::title  { color: #6faf6a; }
+QGroupBox[accent="teal"]   { border-left-color: #94e2d5; }
+QGroupBox[accent="teal"]::title   { color: #5fa89e; }
 
 /* ── Inputs ───────────────────────────────────────────────────────────── */
 QLineEdit, QComboBox {
-    background: #313244;
-    border: 1px solid #45475a;
-    border-radius: 4px;
-    padding: 5px 8px;
+    background: #252538;
+    border: 1px solid #353550;
+    border-radius: 6px;
+    padding: 6px 10px;
     color: #cdd6f4;
     selection-background-color: #89b4fa;
     selection-color: #1e1e2e;
-    min-height: 22px;
+    min-height: 28px;
 }
-QLineEdit:focus, QComboBox:focus {
-    border-color: #89b4fa;
-}
-QLineEdit:disabled, QComboBox:disabled {
-    background: #181825;
-    color: #45475a;
-}
-QComboBox::drop-down { border: none; width: 20px; }
+QLineEdit:focus, QComboBox:focus { border-color: #89b4fa; background: #2a2a42; }
+QLineEdit:disabled, QComboBox:disabled { background: #181825; color: #45475a; }
+QLineEdit::placeholder { color: #585b70; }
+QComboBox::drop-down { border: none; width: 24px; }
 QComboBox::down-arrow { width: 10px; height: 10px; }
 QComboBox QAbstractItemView {
-    background: #313244;
+    background: #252538;
     border: 1px solid #45475a;
     color: #cdd6f4;
     selection-background-color: #89b4fa;
     selection-color: #1e1e2e;
     outline: none;
+    padding: 2px;
 }
 
 /* ── Buttons — base ───────────────────────────────────────────────────── */
 QPushButton {
-    background: #313244;
-    border: 1px solid #45475a;
-    border-radius: 5px;
-    padding: 5px 14px;
-    color: #cdd6f4;
+    background: #252538;
+    border: 1px solid #353550;
+    border-radius: 6px;
+    padding: 6px 16px;
+    color: #a6adc8;
     font-weight: 500;
-    min-height: 22px;
+    min-height: 28px;
 }
-QPushButton:hover  { background: #45475a; border-color: #89b4fa; }
-QPushButton:pressed { background: #585b70; }
-QPushButton:disabled { background: #181825; color: #45475a; border-color: #313244; }
+QPushButton:hover  { background: #2e2e48; border-color: #89b4fa; color: #cdd6f4; }
+QPushButton:pressed { background: #383858; }
+QPushButton:disabled { background: #181825; color: #45475a; border-color: #252535; }
 
-/* ── Buttons — primary (action) ───────────────────────────────────────── */
+/* ── Buttons — primary ────────────────────────────────────────────────── */
 QPushButton[role="primary"] {
-    background: #89b4fa;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #97c0ff, stop:1 #7aa2f7);
     border: none;
-    color: #1e1e2e;
+    border-bottom: 2px solid #5a7fd0;
+    border-radius: 6px;
+    color: #11111b;
     font-weight: 700;
+    letter-spacing: 0.02em;
+    min-height: 34px;
 }
-QPushButton[role="primary"]:hover   { background: #a6c8ff; }
-QPushButton[role="primary"]:pressed { background: #7aa2f7; }
-QPushButton[role="primary"]:disabled { background: #313244; color: #6c7086; }
+QPushButton[role="primary"]:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #aaceff, stop:1 #89b4fa);
+}
+QPushButton[role="primary"]:pressed  { background: #7aa2f7; border-bottom-width: 1px; }
+QPushButton[role="primary"]:disabled { background: #252538; color: #45475a; border: 1px solid #252535; }
 
-/* ── Buttons — danger (stop) ──────────────────────────────────────────── */
+/* ── Buttons — danger ─────────────────────────────────────────────────── */
 QPushButton[role="danger"] {
-    background: #f38ba8;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f5a0b8, stop:1 #e8708e);
     border: none;
-    color: #1e1e2e;
+    border-bottom: 2px solid #b85070;
+    border-radius: 6px;
+    color: #11111b;
     font-weight: 700;
+    min-height: 34px;
 }
-QPushButton[role="danger"]:hover   { background: #f5a0b8; }
-QPushButton[role="danger"]:pressed { background: #eb6f92; }
-QPushButton[role="danger"]:disabled { background: #313244; color: #6c7086; }
+QPushButton[role="danger"]:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f7b0c5, stop:1 #f38ba8);
+}
+QPushButton[role="danger"]:pressed  { background: #f38ba8; border-bottom-width: 1px; }
+QPushButton[role="danger"]:disabled { background: #252538; color: #45475a; border: 1px solid #252535; }
 
 /* ── Checkboxes ───────────────────────────────────────────────────────── */
-QCheckBox { color: #cdd6f4; spacing: 7px; }
+QCheckBox { color: #cdd6f4; spacing: 8px; }
 QCheckBox::indicator {
-    width: 15px; height: 15px;
-    border: 1px solid #585b70;
-    border-radius: 3px;
-    background: #313244;
+    width: 17px; height: 17px;
+    border: 2px solid #484860;
+    border-radius: 4px;
+    background: #1e1e2e;
 }
-QCheckBox::indicator:hover   { border-color: #89b4fa; }
-QCheckBox::indicator:checked {
-    background: #89b4fa;
-    border-color: #89b4fa;
-}
+QCheckBox::indicator:hover   { border-color: #89b4fa; background: #252538; }
+QCheckBox::indicator:checked { background: #89b4fa; border-color: #89b4fa; }
 QCheckBox::indicator:checked:hover { background: #a6c8ff; border-color: #a6c8ff; }
 
 /* ── Progress bar ─────────────────────────────────────────────────────── */
 QProgressBar {
-    background: #313244;
+    background: #252538;
     border: none;
     border-radius: 5px;
-    max-height: 8px;
+    min-height: 6px;
+    max-height: 6px;
     text-align: center;
     color: transparent;
 }
 QProgressBar::chunk {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #89b4fa, stop:1 #cba6f7);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #89b4fa, stop:1 #cba6f7);
     border-radius: 5px;
 }
 
-/* ── Log / text areas ─────────────────────────────────────────────────── */
+/* ── Log areas ────────────────────────────────────────────────────────── */
 QTextEdit {
-    background: #11111b;
-    border: 1px solid #313244;
-    border-radius: 5px;
-    color: #cdd6f4;
-    selection-background-color: #45475a;
-    padding: 4px;
+    background: #0d0d17;
+    border: 1px solid #252538;
+    border-radius: 8px;
+    color: #a6adc8;
+    selection-background-color: #313244;
+    padding: 8px;
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+    font-size: 9pt;
 }
 
 /* ── Labels ───────────────────────────────────────────────────────────── */
-QLabel { color: #cdd6f4; }
-QLabel[role="muted"] { color: #6c7086; font-size: 9pt; }
+QLabel { color: #cdd6f4; background: transparent; }
+QLabel[role="muted"]    { color: #585b70; font-size: 9pt; }
+QLabel[role="app-name"] { color: #cdd6f4; font-size: 15pt; font-weight: 700; letter-spacing: -0.02em; }
+QLabel[role="app-sub"]  { color: #585b70; font-size: 9pt; }
+QLabel[role="log-cap"]  { color: #45475a; font-size: 8.5pt; font-weight: 600; letter-spacing: 0.08em; }
+QLabel[role="status"]   { color: #a6adc8; font-size: 9pt; }
+
+/* ── Thin separator line ─────────────────────────────────────────────── */
+QFrame[frameShape="4"] { color: #2a2a3e; }
+QFrame[frameShape="5"] { color: #2a2a3e; }
 
 /* ── Scrollbars ───────────────────────────────────────────────────────── */
-QScrollBar:vertical {
-    background: #1e1e2e; width: 8px; margin: 0;
+QScrollBar:vertical   { background: transparent; width: 7px; margin: 0; }
+QScrollBar:horizontal { background: transparent; height: 7px; margin: 0; }
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background: #353550; border-radius: 3px; min-height: 20px; min-width: 20px;
 }
-QScrollBar::handle:vertical {
-    background: #45475a; border-radius: 4px; min-height: 24px;
-}
-QScrollBar::handle:vertical:hover { background: #585b70; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal {
-    background: #1e1e2e; height: 8px; margin: 0;
-}
-QScrollBar::handle:horizontal {
-    background: #45475a; border-radius: 4px; min-width: 24px;
-}
-QScrollBar::handle:horizontal:hover { background: #585b70; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #45475a; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { height: 0; width: 0; }
 
 /* ── Tooltips ─────────────────────────────────────────────────────────── */
 QToolTip {
-    background: #313244;
-    border: 1px solid #45475a;
-    color: #cdd6f4;
-    padding: 4px 8px;
-    border-radius: 4px;
+    background: #252538; border: 1px solid #45475a;
+    color: #cdd6f4; padding: 5px 10px; border-radius: 5px;
 }
 
 /* ── Message boxes ────────────────────────────────────────────────────── */
@@ -1736,13 +1742,15 @@ class MainWindow(QMainWindow):
 
     def _make_download_tab(self) -> QWidget:
         w = QWidget()
+        w.setObjectName("tab_content")
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(12)
 
-        # Magazine checkboxes
-        mag_box = QGroupBox("Magazines to download")
+        # ── Magazines ─────────────────────────────────────────────────────────
+        mag_box = QGroupBox("Magazines")
         mag_grid = QGridLayout(mag_box)
+        mag_grid.setHorizontalSpacing(20)
         self.mag_checks: dict[str, QCheckBox] = {}
         for i, name in enumerate(MAGAZINES):
             cb = QCheckBox(name)
@@ -1751,50 +1759,54 @@ class MainWindow(QMainWindow):
             mag_grid.addWidget(cb, i // 3, i % 3)
         layout.addWidget(mag_box)
 
-        # Save location
-        save_box = QGroupBox("Save location")
-        save_row = QHBoxLayout(save_box)
+        # ── Save location ──────────────────────────────────────────────────────
+        save_box = QGroupBox("Save Location")
+        save_box.setProperty("accent", "teal")
+        save_layout = QVBoxLayout(save_box)
+        save_row = QHBoxLayout()
         self.dir_edit = QLineEdit(
             str(Path.home() / "Downloads" / "TrainsMagazines")
         )
         browse_btn = QPushButton("Browse…")
-        browse_btn.setFixedWidth(80)
+        browse_btn.setFixedWidth(90)
         browse_btn.clicked.connect(self._browse_dir)
         save_row.addWidget(self.dir_edit)
         save_row.addWidget(browse_btn)
+        save_layout.addLayout(save_row)
         layout.addWidget(save_box)
 
-        # Cookie file
-        cookie_box = QGroupBox("Authentication — session cookie file")
+        # ── Authentication ─────────────────────────────────────────────────────
+        cookie_box = QGroupBox("Authentication")
+        cookie_box.setProperty("accent", "purple")
+        cookie_col = QVBoxLayout(cookie_box)
         cookie_row = QHBoxLayout()
-        cookie_row.addWidget(QLabel("File:"))
         self.cookie_edit = QLineEdit(DEFAULT_COOKIES_FILE)
         cookie_browse = QPushButton("Browse…")
-        cookie_browse.setFixedWidth(80)
+        cookie_browse.setFixedWidth(90)
         cookie_browse.clicked.connect(self._browse_cookies)
         cookie_row.addWidget(self.cookie_edit)
         cookie_row.addWidget(cookie_browse)
+        cookie_col.addLayout(cookie_row)
         cookie_hint = QLabel(
-            "Tip: leave blank to log in manually each run, or select an existing .json cookie file."
+            "Leave blank to log in manually each run, or select an existing .json cookie file."
         )
         cookie_hint.setWordWrap(True)
         cookie_hint.setProperty("role", "muted")
-        cookie_col = QVBoxLayout()
-        cookie_col.addLayout(cookie_row)
         cookie_col.addWidget(cookie_hint)
-        cookie_box.setLayout(cookie_col)
         layout.addWidget(cookie_box)
 
-        # Options
+        # ── Options ────────────────────────────────────────────────────────────
         opts_box = QGroupBox("Options")
+        opts_box.setProperty("accent", "green")
         opts_layout = QVBoxLayout(opts_box)
+        opts_layout.setSpacing(8)
 
         check_row = QHBoxLayout()
         self.headless_cb = QCheckBox("Headless mode")
         self.headless_cb.setToolTip(
             "Run without a visible browser window.\nRequires a valid saved cookie file."
         )
-        self.test_cb     = QCheckBox("Test mode (3 pages only)")
+        self.test_cb     = QCheckBox("Test mode (3 issues only)")
         self.specials_cb = QCheckBox("Include special issues")
         self.specials_cb.setChecked(True)
         check_row.addWidget(self.headless_cb)
@@ -1804,29 +1816,29 @@ class MainWindow(QMainWindow):
         opts_layout.addLayout(check_row)
 
         sort_row = QHBoxLayout()
-        sort_row.addWidget(QLabel("Download order:"))
+        sort_lbl = QLabel("Download order:")
+        sort_lbl.setFixedWidth(110)
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Newest first", "Oldest first"])
+        self.sort_combo.setFixedWidth(140)
+        sort_row.addWidget(sort_lbl)
         sort_row.addWidget(self.sort_combo)
         sort_row.addStretch()
         opts_layout.addLayout(sort_row)
 
         layout.addWidget(opts_box)
 
-        # Action buttons
+        # ── Action bar ─────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         self.start_btn = QPushButton("▶  Start Download")
-        self.start_btn.setFixedHeight(34)
         self.start_btn.setProperty("role", "primary")
         self.start_btn.clicked.connect(self._start_download)
         self.stop_btn = QPushButton("■  Stop")
-        self.stop_btn.setFixedHeight(34)
         self.stop_btn.setProperty("role", "danger")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_download)
         clear_btn = QPushButton("Clear Progress Cache")
-        clear_btn.setFixedHeight(34)
         clear_btn.clicked.connect(self._clear_progress)
         btn_row.addWidget(self.start_btn)
         btn_row.addWidget(self.stop_btn)
@@ -1834,102 +1846,137 @@ class MainWindow(QMainWindow):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
-        # Progress bar + status label
+        # ── Progress / status ──────────────────────────────────────────────────
         self.dl_progress = QProgressBar()
         self.dl_progress.setVisible(False)
         layout.addWidget(self.dl_progress)
 
+        status_row = QHBoxLayout()
         self.status_label = QLabel("")
-        self.status_label.setProperty("role", "muted")
-        layout.addWidget(self.status_label)
+        self.status_label.setProperty("role", "status")
+        status_row.addWidget(self.status_label)
+        status_row.addStretch()
+        layout.addLayout(status_row)
 
-        # Log output
+        # ── Log ────────────────────────────────────────────────────────────────
+        log_cap = QLabel("DOWNLOAD LOG")
+        log_cap.setProperty("role", "log-cap")
+        layout.addWidget(log_cap)
+
         self.dl_log = QTextEdit()
         self.dl_log.setReadOnly(True)
-        self.dl_log.setFont(QFont("Consolas", 9))
         layout.addWidget(self.dl_log)
 
         return w
 
     def _make_organize_tab(self) -> QWidget:
         w = QWidget()
+        w.setObjectName("tab_content")
         layout = QVBoxLayout(w)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(12)
 
-        src_box = QGroupBox("Source folder (PDFs to organize)")
-        src_row = QHBoxLayout(src_box)
+        # ── Folders ────────────────────────────────────────────────────────────
+        folders_box = QGroupBox("Folders")
+        folders_box.setProperty("accent", "teal")
+        folders_layout = QVBoxLayout(folders_box)
+        folders_layout.setSpacing(8)
+
+        src_row = QHBoxLayout()
+        src_lbl = QLabel("Source:")
+        src_lbl.setFixedWidth(72)
         self.src_edit = QLineEdit()
+        self.src_edit.setPlaceholderText("Folder containing PDFs to organize…")
         src_browse = QPushButton("Browse…")
-        src_browse.setFixedWidth(80)
+        src_browse.setFixedWidth(90)
         src_browse.clicked.connect(lambda: self._pick_dir(self.src_edit))
+        src_row.addWidget(src_lbl)
         src_row.addWidget(self.src_edit)
         src_row.addWidget(src_browse)
-        layout.addWidget(src_box)
+        folders_layout.addLayout(src_row)
 
-        dst_box = QGroupBox("Destination folder (organized output)")
-        dst_row = QHBoxLayout(dst_box)
+        dst_row = QHBoxLayout()
+        dst_lbl = QLabel("Destination:")
+        dst_lbl.setFixedWidth(72)
         self.dst_edit = QLineEdit()
+        self.dst_edit.setPlaceholderText("Folder for organized output (can be same as source)…")
         dst_browse = QPushButton("Browse…")
-        dst_browse.setFixedWidth(80)
+        dst_browse.setFixedWidth(90)
         dst_browse.clicked.connect(lambda: self._pick_dir(self.dst_edit))
+        dst_row.addWidget(dst_lbl)
         dst_row.addWidget(self.dst_edit)
         dst_row.addWidget(dst_browse)
-        layout.addWidget(dst_box)
+        folders_layout.addLayout(dst_row)
 
         prefix_row = QHBoxLayout()
-        prefix_row.addWidget(QLabel("Magazine prefix override:"))
+        prefix_lbl = QLabel("Prefix:")
+        prefix_lbl.setFixedWidth(72)
         self.prefix_combo = QComboBox()
         self.prefix_combo.addItem("Auto-detect")
         for info in MAGAZINES.values():
             self.prefix_combo.addItem(info["prefix"])
+        self.prefix_combo.setFixedWidth(140)
+        self.prefix_combo.setToolTip("Force a specific magazine prefix when auto-detect fails")
+        prefix_row.addWidget(prefix_lbl)
         prefix_row.addWidget(self.prefix_combo)
         prefix_row.addStretch()
-        layout.addLayout(prefix_row)
+        folders_layout.addLayout(prefix_row)
 
+        layout.addWidget(folders_box)
+
+        # ── Organize action ────────────────────────────────────────────────────
+        org_btn_row = QHBoxLayout()
         self.org_run_btn = QPushButton("▶  Organize PDFs")
-        self.org_run_btn.setFixedHeight(34)
         self.org_run_btn.setProperty("role", "primary")
         self.org_run_btn.clicked.connect(self._run_organize)
-        layout.addWidget(self.org_run_btn)
+        org_btn_row.addWidget(self.org_run_btn)
+        org_btn_row.addStretch()
+        layout.addLayout(org_btn_row)
 
-        # -- Cookie / auth row (shared with missing-issues download) ----------
-        cookie_box = QGroupBox("Cookie file (required for downloading missing issues)")
-        cookie_row = QHBoxLayout(cookie_box)
+        # ── Authentication (for missing-issues download) ───────────────────────
+        cookie_box = QGroupBox("Authentication")
+        cookie_box.setProperty("accent", "purple")
+        cookie_col = QVBoxLayout(cookie_box)
+        cookie_row = QHBoxLayout()
         self.org_cookie_edit = QLineEdit()
-        self.org_cookie_edit.setPlaceholderText("session_cookies.json")
+        self.org_cookie_edit.setPlaceholderText("session_cookies.json (required to download missing issues)")
         org_cookie_browse = QPushButton("Browse…")
-        org_cookie_browse.setFixedWidth(80)
+        org_cookie_browse.setFixedWidth(90)
         org_cookie_browse.clicked.connect(self._browse_org_cookies)
         self.org_headless_cb = QCheckBox("Headless browser")
         cookie_row.addWidget(self.org_cookie_edit)
         cookie_row.addWidget(org_cookie_browse)
         cookie_row.addWidget(self.org_headless_cb)
+        cookie_col.addLayout(cookie_row)
         layout.addWidget(cookie_box)
 
-        # -- Download missing row ----------------------------------------------
-        missing_row = QHBoxLayout()
+        # ── Download missing ───────────────────────────────────────────────────
+        missing_btn_row = QHBoxLayout()
+        missing_btn_row.setSpacing(8)
         self.dl_missing_btn = QPushButton("⬇  Download Missing Issues")
-        self.dl_missing_btn.setFixedHeight(34)
         self.dl_missing_btn.setProperty("role", "primary")
         self.dl_missing_btn.setEnabled(False)
         self.dl_missing_btn.clicked.connect(self._start_missing_download)
         self.dl_missing_stop_btn = QPushButton("■  Stop")
-        self.dl_missing_stop_btn.setFixedHeight(34)
         self.dl_missing_stop_btn.setProperty("role", "danger")
         self.dl_missing_stop_btn.setEnabled(False)
         self.dl_missing_stop_btn.clicked.connect(self._stop_missing_download)
-        missing_row.addWidget(self.dl_missing_btn)
-        missing_row.addWidget(self.dl_missing_stop_btn)
-        layout.addLayout(missing_row)
+        missing_btn_row.addWidget(self.dl_missing_btn)
+        missing_btn_row.addWidget(self.dl_missing_stop_btn)
+        missing_btn_row.addStretch()
+        layout.addLayout(missing_btn_row)
 
+        # ── Progress / log ─────────────────────────────────────────────────────
         self.org_progress = QProgressBar()
         self.org_progress.setVisible(False)
         layout.addWidget(self.org_progress)
 
+        log_cap = QLabel("ORGANIZE LOG")
+        log_cap.setProperty("role", "log-cap")
+        layout.addWidget(log_cap)
+
         self.org_log = QTextEdit()
         self.org_log.setReadOnly(True)
-        self.org_log.setFont(QFont("Consolas", 9))
         layout.addWidget(self.org_log)
 
         return w
@@ -1960,7 +2007,7 @@ class MainWindow(QMainWindow):
     def _browse_cookies(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select cookie file", "",
-            "Cookie files (*.json *.pkl *.pickle);;All files (*)"
+            "Cookie files (*.json);;All files (*)"
         )
         if path:
             self.cookie_edit.setText(path)
@@ -2043,13 +2090,14 @@ class MainWindow(QMainWindow):
     def _on_finished(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.dl_progress.setVisible(False)
         self._dl_log("--- Done ---")
         self.status_label.setText("Done.")
 
     def _browse_org_cookies(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select cookie file", "",
-            "Cookie files (*.json *.pkl *.pickle);;All files (*)"
+            "Cookie files (*.json);;All files (*)"
         )
         if path:
             self.org_cookie_edit.setText(path)
@@ -2144,7 +2192,7 @@ class MainWindow(QMainWindow):
                                 f"No archive URL found for prefix '{self._org_prefix}'.")
             return
 
-        cookies  = self.org_cookie_edit.text().strip() or "session_cookies.json"
+        cookies  = self.org_cookie_edit.text().strip() or DEFAULT_COOKIES_FILE
         headless = self.org_headless_cb.isChecked()
 
         self.dl_missing_btn.setEnabled(False)
