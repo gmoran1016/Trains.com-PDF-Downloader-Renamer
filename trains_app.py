@@ -31,7 +31,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog, QTextEdit,
     QProgressBar, QGroupBox, QGridLayout, QComboBox, QMessageBox,
-    QTabWidget, QFrame, QSizePolicy,
+    QTabWidget, QFrame, QSizePolicy, QMenu, QSystemTrayIcon,
 )
 from PyQt5.QtCore import pyqtSignal, QObject, QThread
 from PyQt5.QtGui import QTextCursor
@@ -1914,6 +1914,7 @@ class MainWindow(QMainWindow):
         self._org_log_lines: list[str] = []
         self._build_ui()
         self._load_settings()
+        self._setup_tray()
 
     # -- UI construction ------------------------------------------------------
     def _build_ui(self):
@@ -2406,6 +2407,7 @@ class MainWindow(QMainWindow):
     def _update_progress(self, current: int, total: int):
         if total > 0:
             self.status_label.setText(f"{current} / {total} issues")
+            self._tray.setToolTip(f"Trains Downloader — {current} / {total} downloading…")
 
     def _on_error(self, msg: str):
         self._dl_log(f"ERROR: {msg}")
@@ -2417,6 +2419,7 @@ class MainWindow(QMainWindow):
         self._progress_container.setVisible(False)
         self._dl_log("--- Done ---")
         self.status_label.setText("Done.")
+        self._tray.setToolTip("Trains Downloader — Idle")
 
     def _browse_org_cookies(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -2425,6 +2428,52 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.org_cookie_edit.setText(path)
+
+    def _setup_tray(self):
+        QApplication.instance().setQuitOnLastWindowClosed(False)
+        icon = self.windowIcon()
+        if icon.isNull():
+            icon = self.style().standardIcon(
+                __import__("PyQt5.QtWidgets", fromlist=["QStyle"]).QStyle.SP_DriveNetIcon
+            )
+        self._tray = QSystemTrayIcon(icon, self)
+        menu = QMenu()
+        menu.addAction("Show Window", self.show)
+        menu.addAction("Quit", QApplication.instance().quit)
+        self._tray.setContextMenu(menu)
+        self._tray.activated.connect(self._on_tray_activated)
+        self._tray.setToolTip("Trains Downloader — Idle")
+        self._tray.show()
+
+    def _on_tray_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show()
+            self.activateWindow()
+
+    def closeEvent(self, event):
+        running = (
+            (self.worker is not None and self.worker.isRunning())
+            or (self._missing_worker is not None and self._missing_worker.isRunning())
+        )
+        if not running:
+            event.accept()
+            return
+        event.ignore()
+        dlg = QMessageBox(self)
+        dlg.setWindowTitle("Download in progress")
+        dlg.setText("A download is running. What would you like to do?")
+        minimize_btn = dlg.addButton("Minimize to Tray", QMessageBox.AcceptRole)
+        stop_btn     = dlg.addButton("Stop & Quit",      QMessageBox.DestructiveRole)
+        dlg.addButton("Cancel",                          QMessageBox.RejectRole)
+        dlg.exec_()
+        clicked = dlg.clickedButton()
+        if clicked is minimize_btn:
+            self.hide()
+        elif clicked is stop_btn:
+            for w in (self.worker, self._missing_worker):
+                if w is not None and w.isRunning():
+                    w.stop()
+            QApplication.instance().quit()
 
     def _load_settings(self):
         s = load_settings()
