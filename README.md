@@ -1,6 +1,6 @@
 # Trains.com Magazine Downloader & Organizer
 
-**v1.2.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
+**v1.5.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
 
 ## Download
 
@@ -34,15 +34,20 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 - **GUI interface** — select magazines, set save location, and monitor progress
 - **All three download modes** handled automatically:
-  - Recent issues via direct PDF link
+  - Recent issues via direct PDF link (downloaded in parallel — up to 3 at once)
   - Mid-era issues via the embedded flipbook reader
   - Very old digitised-only issues skipped gracefully
 - **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
 - **Cookie-based authentication** — log in once and sessions are reused across runs
+- **Settings persistence** — save location, cookies path, headless mode, sort order, and magazine selections are remembered between sessions
+- **Per-magazine progress bars** — stacked progress bars show each magazine's download progress with an ETA estimate
+- **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel
 - **Built-in PDF organizer** — renames and sorts PDFs into `YYYY/` subfolders with consistent naming (`MRR-01-January-2024.pdf`)
+- **PDF integrity verification** — each downloaded file is validated with pypdf; corrupt or truncated files are deleted automatically and marked for retry
 - **PDF metadata stamping** — writes correct Title, Subject, Keywords, and Creation Date into each PDF's info dictionary and XMP metadata
 - **Smart completeness report** — after organizing, lists missing issues per year using each magazine's actual publication schedule (monthly, quarterly, etc.)
 - **Download missing issues** — click "Download Missing Issues" after organizing to automatically fetch only the issues you don't have, using the same download engine
+- **Smarter log panel** — live filter field, error badge showing failure count, and a "Copy Errors" button; log lines are color-coded (errors in red, successful moves in green, skipped issues dimmed)
 - **Sort order** — choose newest-first or oldest-first
 - **Test mode** — scans only the first 3 archive pages for quick testing
 - **Headless mode** — hide the browser window (requires valid saved cookies)
@@ -82,8 +87,8 @@ The **Organize** tab can also rename and sort any existing folder of PDFs indepe
 Requires Python 3.10+ and Google Chrome.
 
 ```bash
-git clone https://github.com/yourusername/trains-magazine-downloader.git
-cd trains-magazine-downloader
+git clone https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer.git
+cd Trains.com-PDF-Downloader-Renamer
 python -m venv .venv
 
 # Windows
@@ -94,6 +99,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python trains_app.py
 ```
+
+### Running the tests
+
+```bash
+pip install pypdf pytest
+python -m pytest tests/ -v --basetemp="C:/tmp/pytest-trains"
+```
+
+> The `--basetemp` flag is needed on Windows when the repo lives inside OneDrive (avoids a permission error with pytest's default temp directory).
 
 ### Building the exe locally (Windows)
 
@@ -111,7 +125,11 @@ Output: `dist\TrainsDownloader.exe`
 trains_app.py                  # entire application (GUI + downloader + organizer)
 requirements.txt               # pip dependencies
 build.bat                      # local Windows build script
-.github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push
+pytest.ini                     # pytest config (sets temp dir for Windows/OneDrive compat)
+tests/
+  test_trains_app.py           # unit tests for pure functions (settings, PDF verification, etc.)
+.github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push to main
+docs/superpowers/              # design specs and implementation plans
 ```
 
 ---
