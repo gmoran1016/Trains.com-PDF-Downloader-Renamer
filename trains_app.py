@@ -244,6 +244,55 @@ def rename_and_move(src_path: str, dest_dir: str, hint_prefix: str | None,
     return True, dest
 
 
+def fetch_pdf(url: str, dest_dir: str, hint_prefix: str | None,
+              cookies: dict, flat: bool,
+              download_dir: str, log_fn) -> tuple[bool, str]:
+    """
+    Stream-download a PDF from a direct URL, save to download_dir,
+    then rename/move/verify into dest_dir.
+    Includes a short rate-limiting delay before the request.
+    """
+    import requests as _req
+    from urllib.parse import urlparse
+
+    time.sleep(0.5 + random.uniform(0, 1.0))  # rate limiting
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    tmp_path = None
+    try:
+        r = _req.get(url, cookies=cookies, headers=headers,
+                     stream=True, timeout=DOWNLOAD_TIMEOUT)
+        r.raise_for_status()
+
+        raw_name = os.path.basename(urlparse(url).path) or "download.pdf"
+        if not raw_name.lower().endswith(".pdf"):
+            raw_name += ".pdf"
+
+        tmp_path = os.path.join(download_dir, raw_name)
+        with open(tmp_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=65536):
+                f.write(chunk)
+
+        ok, result = rename_and_move(tmp_path, dest_dir, hint_prefix, flat, log_fn)
+        if ok:
+            tmp_path = None  # successfully moved
+        return ok, result
+
+    except Exception as e:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+        return False, f"HTTP download failed: {e}"
+
+
 def issue_already_on_disk(issue_url: str, dest_dir: str, prefix: str, flat: bool) -> bool:
     """
     Return True if the PDF for this issue URL already exists in dest_dir.
@@ -1103,44 +1152,8 @@ class MagazineDownloader:
 
     def _fetch_pdf(self, url: str, dest_dir: str, hint_prefix: str | None,
                    cookies: dict, flat: bool = False) -> tuple[bool, str]:
-        """Stream-download a PDF from a direct URL and save/rename into dest_dir."""
-        import requests as _req
-        from urllib.parse import urlparse
-
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            )
-        }
-        tmp_path = None
-        try:
-            r = _req.get(url, cookies=cookies, headers=headers,
-                         stream=True, timeout=DOWNLOAD_TIMEOUT)
-            r.raise_for_status()
-
-            raw_name = os.path.basename(urlparse(url).path) or "download.pdf"
-            if not raw_name.lower().endswith(".pdf"):
-                raw_name += ".pdf"
-
-            tmp_path = os.path.join(self.download_dir, raw_name)
-            with open(tmp_path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=65536):
-                    f.write(chunk)
-
-            ok, result = self._rename_and_move(tmp_path, dest_dir, hint_prefix, flat=flat)
-            if ok:
-                tmp_path = None  # successfully moved — nothing to clean up
-            return ok, result
-
-        except Exception as e:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-            return False, f"HTTP download failed: {e}"
+        return fetch_pdf(url, dest_dir, hint_prefix, cookies, flat,
+                         self.download_dir, self._log)
 
     def _rename_and_move(self, src_path: str, dest_dir: str, hint_prefix: str | None,
                          flat: bool = False) -> tuple[bool, str]:
