@@ -1,6 +1,6 @@
 # Trains.com Magazine Downloader & Organizer
 
-**v1.5.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
+**v1.6.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
 
 ## Download
 
@@ -56,7 +56,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 ## Authentication
 
-A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json` and click **Start** — a Chrome window will open for you to log in manually. Credentials are never stored; only the session cookie is saved for reuse.
+A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json`, leave **Hide download browser** unchecked, and click **Start Download**. Chrome will open for you to log in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
 
 ---
 
@@ -103,11 +103,11 @@ python trains_app.py
 ### Running the tests
 
 ```bash
-pip install pypdf pytest
-python -m pytest tests/ -v --basetemp="C:/tmp/pytest-trains"
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
 ```
 
-> The `--basetemp` flag is needed on Windows when the repo lives inside OneDrive (avoids a permission error with pytest's default temp directory).
+The development requirements include both the application dependencies and pytest. Pytest uses the repository-local `.pytest-tmp` directory, so the command does not depend on a shared machine-wide path.
 
 ### Building the exe locally (Windows)
 
@@ -123,11 +123,13 @@ Output: `dist\TrainsDownloader.exe`
 
 ```
 trains_app.py                  # entire application (GUI + downloader + organizer)
-requirements.txt               # pip dependencies
+requirements.txt               # runtime pip dependencies
+requirements-dev.txt           # runtime dependencies plus pytest
 build.bat                      # local Windows build script
-pytest.ini                     # pytest config (sets temp dir for Windows/OneDrive compat)
+pytest.ini                     # pytest config
 tests/
-  test_trains_app.py           # unit tests for pure functions (settings, PDF verification, etc.)
+  test_trains_app.py           # unit tests for settings, PDF and organizer behavior
+  test_ui_smoke.py             # offscreen Qt construction/layout smoke tests
 .github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push to main
 docs/superpowers/              # design specs and implementation plans
 ```

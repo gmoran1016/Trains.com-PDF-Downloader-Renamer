@@ -18,7 +18,7 @@ echo Installing dependencies...
 if exist build  rmdir /s /q build
 if exist dist   rmdir /s /q dist
 
-:: Build a single-folder distribution (faster startup than --onefile with PyQt5)
+:: Build a single-file distribution.
 echo Building executable...
 %PYTHON% -m PyInstaller ^
     --noconfirm ^
@@ -29,7 +29,6 @@ echo Building executable...
     --collect-all PyQt5 ^
     --collect-all selenium ^
     --hidden-import requests ^
-    --hidden-import bs4 ^
     --collect-all pypdf ^
     trains_app.py
 
@@ -43,8 +42,8 @@ if errorlevel 1 (
 echo.
 echo ============================================================
 echo  Build complete!
-echo  Output folder: dist\TrainsDownloader\
-echo  Run:           dist\TrainsDownloader\TrainsDownloader.exe
+echo  Output file: dist\TrainsDownloader.exe
+echo  Run:         dist\TrainsDownloader.exe
 echo.
 echo  NOTE: Chrome must be installed on the target machine.
 echo        The first run will auto-download the matching ChromeDriver.

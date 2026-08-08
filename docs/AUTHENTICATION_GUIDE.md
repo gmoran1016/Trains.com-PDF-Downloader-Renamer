@@ -1,123 +1,79 @@
 # Authentication Guide
 
-This document describes the simplified authentication workflow used by the
-new `trains_downloader` package.  The CLI entrypoint is `train-cli`, and the
-PySide6 GUI (`train-gui`) uses the same underlying logic.
+The desktop application accesses subscriber-only magazine archives through a
+logged-in trains.com browser session. An active trains.com subscription is
+required.
 
-## Overview
+## First-time setup
 
-The scraper requires a logged‑in trains.com session in order to access
-subscriber‑only archives.  Rather than storing credentials, the application
-saves the browser session cookies to a JSON file which can be re‑used on
-subsequent runs.  This method avoids exposing your username/password and is
-compatible with headless operation.
+1. Launch the application.
+2. Leave the **COOKIE FILE** field set to `session_cookies.json`, or use
+   **Browse…** to choose a JSON cookie-file location.
+3. Leave **Hide download browser** unchecked.
+4. Select at least one magazine and click **Start Download**.
+5. Chrome opens to trains.com. Complete the subscription login in that visible
+   browser window.
+6. The application waits for the authenticated session, then saves the
+   session cookies as JSON for later runs.
 
-### Default cookies file
+The application stores no username or password. Login detection waits for up
+to five minutes. If login is not detected, keep the browser open until the
+account page is complete and try again.
 
-By default the cookies are written to `session_cookies.json` in the current
-working directory.  Specify a different path with the `--cookies` flag or the
-corresponding GUI field.
+## Later runs
 
-## First‑time login
+When the JSON cookie file is present and still valid, the application loads it
+and checks the session automatically. The log reports **Authenticated via saved
+cookies.** when the session is accepted.
 
-Run the CLI (no `--cookies` required) or launch the GUI, then sign in using
-your trains.com subscription account.  For example:
+If the saved cookies no longer authenticate, the application reports that they
+did not authenticate and asks for an interactive login. Leave the browser
+visible, complete login again, and the JSON file will be refreshed.
 
-```bash
-train-cli --magazine "Model Railroader" --test
-```
+## Headless operation
 
-A browser window will open.  After you complete the login flow the scraper
-automatically detects the authenticated session and saves the cookies file.
+**Hide download browser** runs downloads without displaying Chrome. Use it only
+after a saved JSON cookie file has successfully authenticated an interactive
+run. If headless mode is enabled without a valid session, the application stops
+before collecting issues and instructs you to disable headless mode.
 
-## Subsequent runs
+The organizer panel’s **Hide browser for missing-issue downloads** setting has
+the same prerequisite when using **Download Missing**. It does not affect a
+local **Organize PDFs** run that does not download anything.
 
-Simply supply the cookies file and the scraper will reuse the session:
+## Cookie-file security
 
-```bash
-train-cli --magazine "Model Railroader" --cookies session_cookies.json
-```
+JSON cookies represent an authenticated session. Treat the file like a
+password:
 
-If the cookies have expired you will be prompted to log in again; the file
-will then be updated.
+- do not commit it to Git;
+- do not upload or share it;
+- store it somewhere accessible only to the intended Windows user;
+- delete it and repeat interactive login if you suspect it was exposed.
 
-## Headless / scheduled operation
-
-Cookies allow the scraper to run headlessly without user interaction:
-
-```bash
-train-cli --magazine "Model Railroader" --cookies session_cookies.json --headless
-```
-
-Add `--test` when experimenting to limit the number of pages scanned.
-
-## Using the GUI
-
-Start the GUI with `train-gui` and use the **Load cookies…** button to pick an
-existing JSON file.  Once logged in future sessions will automatically reuse
-that file.
+Pickle cookie files are not supported. Use a JSON export or let the
+application create a fresh JSON session file.
 
 ## Troubleshooting
 
-* **Login not detected** – make sure you actually completed the login page and
-  did not close the browser prematurely.  Run the command again without
-  `--headless` to observe the process.
-* **Cookies expire** – delete the JSON file and repeat the first‑time login
-  procedure.
-* **Multiple accounts** – maintain separate cookie files and specify the
-  appropriate `--cookies` argument or load the correct file in the GUI.
+### Chrome does not open
 
-Cookies contain your authenticated session and should be treated as
-sensitive; do not commit them to version control or share them with others.
+Confirm that Google Chrome is installed and that **Hide download browser** is
+unchecked. Close any stale application instance and try again.
 
+### Login is not detected
 
-## Security Notes
+Finish the trains.com subscription login in the browser window and wait for
+the account page to load. If the five-minute wait expires, start again with
+headless mode disabled.
 
-1. **Cookie files contain your session** - keep them secure
-2. **Don't share cookie files** - they give access to your account
-3. **Use interactive login** instead of command-line password
-4. **Cookies expire** - you'll need to re-login periodically
-5. **Don't commit cookies to git** - they're in `.gitignore` by default
+### Headless mode stops immediately
 
-## Command Reference
+Run one interactive session first so the application can save valid JSON
+cookies. Then enable **Hide download browser** on the next run.
 
-| Flag | Description |
-|------|-------------|
-| `--login` | Perform login (prompts for credentials) |
-| `--username USER` | Provide username/email |
-| `--password PASS` | Provide password (not recommended) |
-| `--use-cookies` | Load and use saved cookies |
-| `--save-cookies` | Save cookies after login |
-| `--cookies-file PATH` | Specify cookie file path |
+### A cookie file is rejected
 
-## Examples by Use Case
-
-### Download with subscription (first time)
-```bash
-python Magazine-Downloader.py --login --save-cookies
-```
-
-### Download with subscription (subsequent runs)
-```bash
-python Magazine-Downloader.py --use-cookies
-```
-
-### Automated/scheduled downloads
-```bash
-# Setup once with login
-python Magazine-Downloader.py --login --save-cookies
-
-# Use in cron/scheduled task
-python Magazine-Downloader.py --use-cookies --headless
-```
-
-### Debug login issues
-```bash
-# Run without headless to see what's happening
-python Magazine-Downloader.py --login --save-cookies
-```
-
-### Download specific range with authentication
-```bash
-python Magazine-Downloader.py --use-cookies --start-page 50 --end-page 60
-```
+Check that the selected file is readable JSON and contains the current
+trains.com session. If it is old, deleted, or invalid, choose a new path or
+remove it and complete interactive login again.

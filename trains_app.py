@@ -19,6 +19,7 @@ from calendar import month_name, month_abbr as _month_abbr
 from pathlib import Path
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 
 try:
     import pypdf
@@ -29,6 +30,7 @@ except ImportError:
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog, QTextEdit,
     QProgressBar, QComboBox, QMessageBox, QMenu, QSystemTrayIcon,
 )
@@ -216,6 +218,10 @@ def rename_and_move(src_path: str, dest_dir: str, hint_prefix: str | None,
     stamp metadata, verify integrity.
     Returns (True, dest_path) on success or (False, reason) on failure.
     """
+    if not _verify_pdf(src_path):
+        log_fn(f"  [corrupt] {os.path.basename(src_path)} — left in place")
+        return False, "corrupt"
+
     parsed = parse_pdf_filename(src_path, hint_prefix)
     if parsed:
         new_stem, year, mname = parsed
@@ -232,9 +238,9 @@ def rename_and_move(src_path: str, dest_dir: str, hint_prefix: str | None,
         _stamp_pdf_metadata(dest, mname, year, warn_fn=log_fn)
 
     if not _verify_pdf(dest):
-        log_fn(f"  [corrupt] {os.path.basename(dest)} — deleted, will retry")
+        log_fn(f"  [corrupt] {os.path.basename(dest)} — restoring source")
         try:
-            os.unlink(dest)
+            shutil.move(dest, src_path)
         except OSError:
             pass
         return False, "corrupt"
@@ -707,6 +713,31 @@ def _unique_path(base_path: str) -> str:
     return f"{root}-{i}{ext}"
 
 
+@dataclass
+class OrganizeSummary:
+    """Structured outcome from one organizer run."""
+
+    moved: int = 0
+    already_correct: int = 0
+    unrecognized: int = 0
+    corrupt: int = 0
+    conflicts: int = 0
+    metadata_stamped: int = 0
+    report: list[str] = field(default_factory=list)
+    missing_by_prefix_year: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+
+
+def _missing_download_selection(summary: OrganizeSummary) -> tuple[str | None, dict[str, list[str]]]:
+    """Return a safe missing-download target only for one observed publication."""
+    if len(summary.missing_by_prefix_year) != 1:
+        return None, {}
+    prefix, by_year = next(iter(summary.missing_by_prefix_year.items()))
+    missing = {year: months for year, months in by_year.items() if months}
+    if not missing:
+        return None, {}
+    return prefix, missing
+
+
 def _detect_issue_frequency(issues_by_year: dict) -> list | None:
     """
     Infer the expected issue months from the collected files.
@@ -743,7 +774,8 @@ def _detect_issue_frequency(issues_by_year: dict) -> list | None:
 def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None, log_fn=None, progress_fn=None):
     """
     Move and rename PDFs from source_dir into dest_dir/YYYY/ subfolders.
-    Returns (moved_count, already_correct_count, unrecognized_count, missing_report_lines).
+    Returns an OrganizeSummary describing moves, integrity checks, conflicts,
+    metadata updates, and per-publication completeness.
     progress_fn, if provided, is called with (current, total) after each file is processed.
     """
     def _log(msg):
@@ -759,21 +791,37 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
                 all_pdfs.append((root, fname))
     total_pdfs = len(all_pdfs)
 
-    issues_by_year: dict[str, set] = {}
-    observed_prefixes: set[str] = set()
-    moved = already_correct = unrecognized = metadata_stamped = 0
+    issues_by_prefix_year: dict[str, dict[str, set[str]]] = {}
+    summary = OrganizeSummary()
+
+    def _record_issue(prefix: str, year: str, mname: str | None) -> None:
+        months = issues_by_prefix_year.setdefault(prefix, {}).setdefault(year, set())
+        if mname:
+            months.add(mname)
+
+    def _emit_progress(file_idx: int) -> None:
+        if progress_fn:
+            progress_fn(file_idx + 1, total_pdfs)
 
     for file_idx, (root, fname) in enumerate(all_pdfs):
         fpath = os.path.join(root, fname)
         parsed = parse_pdf_filename(fpath, hint_prefix)
         if not parsed:
             _log(f"  Skipping (unrecognized, no date found in filename or PDF content): {fname}")
-            unrecognized += 1
-            if progress_fn:
-                progress_fn(file_idx + 1, total_pdfs)
+            summary.unrecognized += 1
+            _emit_progress(file_idx)
             continue
         new_stem, year, mname = parsed
-        observed_prefixes.add(new_stem.split("-")[0].upper())
+        prefix = new_stem.split("-", 1)[0].upper()
+
+        if not _verify_pdf(fpath):
+            _log(f"  [corrupt] {fname} — left in place")
+            summary.corrupt += 1
+            _emit_progress(file_idx)
+            continue
+
+        _record_issue(prefix, year, mname)
+
         year_dir = os.path.join(dest_dir, year)
         expected_path = os.path.join(year_dir, new_stem + ".pdf")
         fname_stem = os.path.splitext(fname)[0]
@@ -784,46 +832,46 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
             and re.fullmatch(re.escape(new_stem) + r"-\d+", fname_stem, re.IGNORECASE)
         )
         if is_duplicate_variant or os.path.normcase(os.path.abspath(fpath)) == os.path.normcase(os.path.abspath(expected_path)):
-            if mname:
-                issues_by_year.setdefault(year, set()).add(mname)
-            else:
-                issues_by_year.setdefault(year, set())
+            if is_duplicate_variant and os.path.exists(expected_path):
+                summary.conflicts += 1
+                _log(f"  [conflict] {fname} — duplicate preserved alongside {os.path.basename(expected_path)}")
             if _stamp_pdf_metadata(fpath, mname, year, warn_fn=_log):
                 _log(f"  Metadata updated: {fname}")
-                metadata_stamped += 1
-            already_correct += 1
-            if progress_fn:
-                progress_fn(file_idx + 1, total_pdfs)
+                summary.metadata_stamped += 1
+            summary.already_correct += 1
+            _emit_progress(file_idx)
             continue
         os.makedirs(year_dir, exist_ok=True)
+        has_conflict = os.path.exists(expected_path)
         dest_path = _unique_path(expected_path)
+        if has_conflict:
+            summary.conflicts += 1
+            _log(f"  [conflict] {fname} — canonical issue exists; preserving as {os.path.basename(dest_path)}")
         shutil.move(fpath, dest_path)
         if _stamp_pdf_metadata(dest_path, mname, year, warn_fn=_log):
-            metadata_stamped += 1
-        _log(f"  {fname}  →  {dest_path}")
-        if mname:
-            issues_by_year.setdefault(year, set()).add(mname)
-        else:
-            issues_by_year.setdefault(year, set())
-        moved += 1
-        if progress_fn:
-            progress_fn(file_idx + 1, total_pdfs)
+            summary.metadata_stamped += 1
+        if not has_conflict:
+            _log(f"  {fname}  →  {dest_path}")
+        summary.moved += 1
+        _emit_progress(file_idx)
 
-    # Determine expected months from hint_prefix, or from the single observed prefix
-    _pfx = hint_prefix or (next(iter(observed_prefixes)) if len(observed_prefixes) == 1 else None)
-    expected_months = _detect_issue_frequency(issues_by_year) \
-        or (PREFIX_ISSUE_MONTHS.get(_pfx, ALL_MONTHS) if _pfx else ALL_MONTHS)
+    # Determine expected months independently for each observed publication.
     today = datetime.date.today()
-    report = []
-    for year in sorted(issues_by_year):
-        yr_int = int(year)
-        missing = [
-            m for m in expected_months
-            if m not in issues_by_year[year]
-            and datetime.date(yr_int, MONTH_NUM_FROM_NAME[m], 1) <= today
-        ]
-        report.append(f"{year}: {'complete' if not missing else 'missing ' + str(missing)}")
-    return moved, already_correct, unrecognized, metadata_stamped, report
+    for prefix in sorted(issues_by_prefix_year):
+        years = issues_by_prefix_year[prefix]
+        expected_months = _detect_issue_frequency(years) \
+            or PREFIX_ISSUE_MONTHS.get(prefix, ALL_MONTHS)
+        for year in sorted(years):
+            yr_int = int(year)
+            missing = [
+                m for m in expected_months
+                if m not in years[year]
+                and datetime.date(yr_int, MONTH_NUM_FROM_NAME[m], 1) <= today
+            ]
+            summary.missing_by_prefix_year.setdefault(prefix, {})[year] = missing
+            state = "complete" if not missing else f"missing {missing}"
+            summary.report.append(f"{prefix} {year}: {state}")
+    return summary
 
 
 # ------------------------------------------------------------------------------
@@ -1736,7 +1784,7 @@ QPushButton[role="chip"]:hover:checked  { background: #324878; }
 
 /* ── Section labels ───────────────────────────────────────────────────── */
 QLabel[role="section"] {
-    color: #45475a;
+    color: #a6adc8;
     font-size: 8.5pt;
     font-weight: 700;
     letter-spacing: 0.1em;
@@ -1955,19 +2003,30 @@ class MainWindow(QMainWindow):
         # ── Shared auth row ──────────────────────────────────────────────────
         auth_row = QWidget()
         auth_row.setObjectName("auth_row")
-        auth_layout = QHBoxLayout(auth_row)
+        auth_layout = QVBoxLayout(auth_row)
         auth_layout.setContentsMargins(12, 8, 12, 8)
         auth_layout.setSpacing(8)
+        cookie_row = QHBoxLayout()
+        cookie_row.setSpacing(8)
         cookie_lbl = QLabel("COOKIE FILE")
         cookie_lbl.setProperty("role", "section")
         self.cookie_edit = QLineEdit(DEFAULT_COOKIES_FILE)
         cookie_browse = QPushButton("Browse…")
         cookie_browse.setFixedWidth(80)
         cookie_browse.clicked.connect(self._browse_cookies)
-        self.org_headless_cb = QCheckBox("Headless browser")
-        auth_layout.addWidget(cookie_lbl)
-        auth_layout.addWidget(self.cookie_edit)
-        auth_layout.addWidget(cookie_browse)
+        cookie_row.addWidget(cookie_lbl)
+        cookie_row.addWidget(self.cookie_edit)
+        cookie_row.addWidget(cookie_browse)
+        auth_layout.addLayout(cookie_row)
+        auth_note = QLabel(
+            "Requires an active trains.com subscription. Leave the browser visible "
+            "for first-time login; the JSON cookie file stores your session and is "
+            "sensitive. Enable headless mode only after login succeeds."
+        )
+        auth_note.setProperty("role", "status")
+        auth_note.setWordWrap(True)
+        auth_layout.addWidget(auth_note)
+        self.org_headless_cb = QCheckBox("Hide browser for missing-issue downloads")
         auth_layout.addWidget(self.org_headless_cb)
         layout.addWidget(auth_row)
 
@@ -2007,19 +2066,22 @@ class MainWindow(QMainWindow):
         mag_lbl = QLabel("MAGAZINES")
         mag_lbl.setProperty("role", "section")
         layout.addWidget(mag_lbl)
-        chips_row = QHBoxLayout()
-        chips_row.setSpacing(6)
+        self.magazine_grid = QGridLayout()
+        self.magazine_grid.setHorizontalSpacing(6)
+        self.magazine_grid.setVerticalSpacing(6)
         self.mag_chips: dict[str, QPushButton] = {}
-        for name in MAGAZINES:
+        for index, name in enumerate(MAGAZINES):
             btn = QPushButton(name)
             btn.setProperty("role", "chip")
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.toggled.connect(self._save_settings)
             self.mag_chips[name] = btn
-            chips_row.addWidget(btn)
-        chips_row.addStretch()
-        layout.addLayout(chips_row)
+            row, column = divmod(index, 3)
+            self.magazine_grid.addWidget(btn, row, column)
+        for column in range(3):
+            self.magazine_grid.setColumnStretch(column, 1)
+        layout.addLayout(self.magazine_grid)
 
         # ── Save location ─────────────────────────────────────────────────────
         save_lbl = QLabel("SAVE LOCATION")
@@ -2041,7 +2103,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(opts_lbl)
         opts_row = QHBoxLayout()
         opts_row.setSpacing(16)
-        self.headless_cb = QCheckBox("Headless")
+        self.headless_cb = QCheckBox("Hide download browser")
         self.headless_cb.setToolTip(
             "Run without a visible browser window.\nRequires a valid saved cookie file."
         )
@@ -2408,31 +2470,17 @@ class MainWindow(QMainWindow):
 
         if self._org_worker.result is None:
             return
-        moved, already_correct, unrecognized, metadata_stamped, report = self._org_worker.result
+        summary = self._org_worker.result
 
-        self._log(f"\n-- {moved} moved, {already_correct} already correct, "
-                  f"{unrecognized} unrecognized, {metadata_stamped} metadata updated --")
-        for line in report:
+        self._log(
+            f"\n-- {summary.moved} moved, {summary.already_correct} already correct, "
+            f"{summary.unrecognized} unrecognized, {summary.corrupt} corrupt, "
+            f"{summary.conflicts} conflicts, {summary.metadata_stamped} metadata updated --"
+        )
+        for line in summary.report:
             self._log(line)
 
-        hint = self._org_hint
-        dst  = self._org_dst
-
-        self._missing_by_year: dict[str, list[str]] = {}
-        for line in report:
-            m = re.match(r"(\d{4}): missing (\[.*\])", line)
-            if m:
-                try:
-                    import ast
-                    self._missing_by_year[m.group(1)] = ast.literal_eval(m.group(2))
-                except Exception:
-                    pass
-
-        self._org_prefix: str | None = hint
-        if not self._org_prefix:
-            candidate = os.path.basename(os.path.normpath(dst)).upper()
-            if candidate in PREFIX_TO_TITLE:
-                self._org_prefix = candidate
+        self._org_prefix, self._missing_by_year = _missing_download_selection(summary)
 
         has_missing = bool(self._missing_by_year) and self._org_prefix and \
                       _archive_url_for_prefix(self._org_prefix) is not None
@@ -2440,6 +2488,14 @@ class MainWindow(QMainWindow):
         if has_missing:
             total = sum(len(v) for v in self._missing_by_year.values())
             self._log(f"\n{total} missing issue(s) found — click 'Download Missing' to fetch them.")
+        elif len(summary.missing_by_prefix_year) > 1 and any(
+            any(months for months in by_year.values())
+            for by_year in summary.missing_by_prefix_year.values()
+        ):
+            self._log(
+                "\nMultiple publications found; review each report separately before "
+                "using Download Missing for one magazine."
+            )
 
     def _start_missing_download(self):
         if self._missing_worker is not None and self._missing_worker.isRunning():
