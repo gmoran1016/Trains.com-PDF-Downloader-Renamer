@@ -1,6 +1,6 @@
 # Trains.com Magazine Downloader & Organizer
 
-**v1.5.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
+**v1.6.0** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
 
 ## Download
 
@@ -43,10 +43,11 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 - **Per-magazine progress bars** — stacked progress bars show each magazine's download progress with an ETA estimate
 - **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel
 - **Built-in PDF organizer** — renames and sorts PDFs into `YYYY/` subfolders with consistent naming (`MRR-01-January-2024.pdf`)
-- **PDF integrity verification** — each downloaded file is validated with pypdf; corrupt or truncated files are deleted automatically and marked for retry
+- **PDF integrity verification** — downloaded files are validated with pypdf; corrupt or truncated organizer inputs stay in the source folder and are reported instead of being moved
+- **Conflict-safe organization** — duplicate issue targets are preserved with an explicit conflict count and log entry
 - **PDF metadata stamping** — writes correct Title, Subject, Keywords, and Creation Date into each PDF's info dictionary and XMP metadata
-- **Smart completeness report** — after organizing, lists missing issues per year using each magazine's actual publication schedule (monthly, quarterly, etc.)
-- **Download missing issues** — click "Download Missing Issues" after organizing to automatically fetch only the issues you don't have, using the same download engine
+- **Smart completeness report** — after organizing, lists missing issues per magazine and year using each publication's schedule (monthly, quarterly, etc.)
+- **Download missing issues** — after a single-magazine organization run, fetch only the missing issues using the same download engine
 - **Smarter log panel** — live filter field, error badge showing failure count, and a "Copy Errors" button; log lines are color-coded (errors in red, successful moves in green, skipped issues dimmed)
 - **Sort order** — choose newest-first or oldest-first
 - **Test mode** — scans only the first 3 archive pages for quick testing
@@ -56,7 +57,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 ## Authentication
 
-A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json` and click **Start** — a Chrome window will open for you to log in manually. Credentials are never stored; only the session cookie is saved for reuse.
+A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json`, leave **Hide download browser** unchecked, and click **Start Download**. Chrome will open for you to log in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
 
 ---
 
@@ -78,7 +79,7 @@ TrainsMagazines/
 └── GRW/
 ```
 
-The **Organize** tab can also rename and sort any existing folder of PDFs independently of the downloader. After organizing, the app stamps each PDF with correct metadata (Title, Subject, Keywords, Creation Date) and reports which issues are missing for each year based on the magazine's publication schedule.
+The **Organize** tab can also rename and sort any existing folder of PDFs independently of the downloader. After organizing, the app stamps each valid PDF with correct metadata (Title, Subject, Keywords, Creation Date), leaves corrupt inputs in place for recovery, reports destination conflicts, and lists missing issues separately for each detected magazine and year.
 
 ---
 
@@ -103,11 +104,11 @@ python trains_app.py
 ### Running the tests
 
 ```bash
-pip install pypdf pytest
-python -m pytest tests/ -v --basetemp="C:/tmp/pytest-trains"
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
 ```
 
-> The `--basetemp` flag is needed on Windows when the repo lives inside OneDrive (avoids a permission error with pytest's default temp directory).
+The development requirements include both the application dependencies and pytest. Pytest uses the repository-local `.pytest-tmp` and `.pytest-cache-local` directories, so the command does not depend on shared machine-wide paths.
 
 ### Building the exe locally (Windows)
 
@@ -123,13 +124,16 @@ Output: `dist\TrainsDownloader.exe`
 
 ```
 trains_app.py                  # entire application (GUI + downloader + organizer)
-requirements.txt               # pip dependencies
+requirements.txt               # runtime pip dependencies
+requirements-dev.txt           # runtime dependencies plus pytest
 build.bat                      # local Windows build script
-pytest.ini                     # pytest config (sets temp dir for Windows/OneDrive compat)
+pytest.ini                     # pytest config
 tests/
-  test_trains_app.py           # unit tests for pure functions (settings, PDF verification, etc.)
+  test_trains_app.py           # unit tests for settings, PDF and organizer behavior
+  test_ui_smoke.py             # offscreen Qt construction/layout smoke tests
 .github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push to main
 docs/superpowers/              # design specs and implementation plans
+docs/usability-audit-2026-08-08.md  # QA findings and remediation evidence
 ```
 
 ---

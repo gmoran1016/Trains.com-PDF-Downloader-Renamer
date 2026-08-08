@@ -91,6 +91,7 @@ def test_rename_and_move_returns_false_for_corrupt_file(tmp_path):
     ok, result = rename_and_move(str(bad_pdf), str(dst), "MRR", False, logs.append)
     assert ok is False
     assert result == "corrupt"
+    assert bad_pdf.exists(), "a corrupt input must remain recoverable in the source directory"
     assert not any(dst.rglob("*.pdf"))
 
 
@@ -105,6 +106,90 @@ def test_rename_and_move_moves_and_renames_valid_pdf(tmp_path):
     assert ok is True
     assert "MRR" in result
     assert os.path.exists(result)
+
+
+def test_organize_pdfs_rejects_corrupt_input_without_moving(tmp_path):
+    from trains_app import organize_pdfs
+
+    src = tmp_path / "src"; src.mkdir()
+    dst = tmp_path / "dst"; dst.mkdir()
+    bad_pdf = src / "MRR-2024-07.pdf"
+    bad_pdf.write_bytes(b"%PDF-1.4 truncated")
+    logs = []
+
+    summary = organize_pdfs(str(src), str(dst), "MRR", log_fn=logs.append)
+
+    assert summary.corrupt == 1
+    assert summary.moved == 0
+    assert bad_pdf.exists()
+    assert not any(dst.rglob("*.pdf"))
+    assert any("[corrupt]" in line for line in logs)
+    assert "MRR" not in summary.missing_by_prefix_year
+
+
+def test_organize_pdfs_reports_and_preserves_destination_conflicts(tmp_path):
+    from trains_app import organize_pdfs
+
+    src = tmp_path / "src"; src.mkdir()
+    first = src / "first"; first.mkdir()
+    second = src / "second"; second.mkdir()
+    dst = tmp_path / "dst"; dst.mkdir()
+    data = _make_valid_pdf_bytes()
+    (first / "2024-01.pdf").write_bytes(data)
+    (second / "MRR-2024-01.pdf").write_bytes(data)
+    logs = []
+
+    summary = organize_pdfs(str(src), str(dst), "MRR", log_fn=logs.append)
+
+    outputs = sorted(path.name for path in (dst / "2024").glob("*.pdf"))
+    assert summary.moved == 2
+    assert summary.conflicts == 1
+    assert outputs == [
+        "MRR-01-January-2024-1.pdf",
+        "MRR-01-January-2024.pdf",
+    ]
+    assert any("[conflict]" in line for line in logs)
+
+
+def test_organize_pdfs_reports_completeness_per_publication(tmp_path):
+    from trains_app import organize_pdfs
+
+    src = tmp_path / "src"; src.mkdir()
+    dst = tmp_path / "dst"; dst.mkdir()
+    data = _make_valid_pdf_bytes()
+    (src / "MRR-2024-01.pdf").write_bytes(data)
+    (src / "MRR-2024-02.pdf").write_bytes(data)
+    (src / "CTR-2024-03.pdf").write_bytes(data)
+    (src / "TRN-2024-01.pdf").write_bytes(data)
+
+    summary = organize_pdfs(str(src), str(dst), log_fn=lambda _line: None)
+
+    assert "MRR 2024: " in "\n".join(summary.report)
+    assert "CTR 2024: " in "\n".join(summary.report)
+    assert "TRN 2024: " in "\n".join(summary.report)
+    assert not any(line.startswith("2024:") for line in summary.report)
+    assert summary.missing_by_prefix_year["CTR"]["2024"] == [
+        "June", "September", "December"
+    ]
+
+
+def test_missing_download_selection_requires_one_publication():
+    from trains_app import OrganizeSummary, _missing_download_selection
+
+    mixed = OrganizeSummary(
+        missing_by_prefix_year={
+            "MRR": {"2024": ["March"]},
+            "CTR": {"2024": ["June"]},
+        }
+    )
+    single = OrganizeSummary(
+        missing_by_prefix_year={"MRR": {"2024": ["March"]}}
+    )
+
+    assert _missing_download_selection(mixed) == (None, {})
+    assert _missing_download_selection(single) == (
+        "MRR", {"2024": ["March"]}
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.pytest-cache-local/
+.pytest-tmp/
 .mypy_cache/
 .hypothesis/
 
@@ -15,6 +17,8 @@ env/
 # IDE
 .vscode/
 .idea/
+.worktrees/
+.superpowers/
 *.swp
 *.swo
 *~
@@ -41,5 +45,6 @@ downloads-*/
 
 # Temp / partial downloads
 *.tmp
+*.meta_tmp
 *.crdownload
 *.download
