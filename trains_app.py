@@ -326,16 +326,24 @@ def detect_download_mode(driver) -> tuple[str, str | None]:
         if href:
             return "mode1", href
 
-    has_flipbook = bool(
-        driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover")
-        or driver.find_elements(
-            By.XPATH, "//button[contains(normalize-space(.), 'Read Magazine')]"
-        )
-    )
-    if has_flipbook:
+    if _has_flipbook_trigger(driver):
         return "mode2", None
 
     return "mode3", None
+
+
+def _has_flipbook_trigger(driver) -> bool:
+    """Return whether the issue page exposes a reader/viewer entry point."""
+    from selenium.webdriver.common.by import By
+
+    if driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover"):
+        return True
+    for label in ("Read Magazine", "PDF Edition"):
+        if driver.find_elements(
+            By.XPATH, f"//button[contains(normalize-space(.), '{label}')]"
+        ):
+            return True
+    return False
 
 
 def _handle_result(ok: bool, result: str, issue_url: str,
@@ -1170,17 +1178,11 @@ class MagazineDownloader:
             # ---- Mode 2: flipbook reader ----------------------------------------
             # The btnDownloadPdf span only exists AFTER the reader is opened.
             # Detect the flipbook cover div or "Read Magazine" button as the trigger.
-            has_flipbook = bool(
-                self._driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover")
-                or self._driver.find_elements(
-                    By.XPATH, "//button[contains(normalize-space(.), 'Read Magazine')]"
-                )
-            )
-            if has_flipbook:
+            if _has_flipbook_trigger(self._driver):
                 return self._flipbook_download(issue_url, dest_dir, hint_prefix, flat=flat)
 
             # ---- Mode 3: no download available (read-only) ------------------
-            return False, "No PDF download available (read-only issue)"
+            return False, f"No PDF download available for {issue_url} (read-only issue)"
 
         except Exception as e:
             logger.exception(f"Error downloading {issue_url}")
@@ -1244,7 +1246,27 @@ class MagazineDownloader:
                     continue
             # Fallback: the ci-media__cover div
             covers = self._driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover")
-            return covers[0] if covers else None
+            if covers:
+                return covers[0]
+            for label in ("PDF Edition", "Read Magazine"):
+                buttons = self._driver.find_elements(
+                    By.XPATH, f"//button[contains(normalize-space(.), '{label}')]"
+                )
+                if buttons:
+                    return buttons[0]
+            return None
+
+        def _find_download_control(driver):
+            selectors = (
+                "span[data-name='btnDownloadPdf']",
+                "[data-name='btnDownloadPdf']",
+                "a[href$='.pdf']",
+            )
+            for selector in selectors:
+                controls = driver.find_elements(By.CSS_SELECTOR, selector)
+                if controls:
+                    return controls[0]
+            return False
 
         # Step 1 & 2: click to open the reader, then wait for the download button.
         # Retry up to 5 times (some pages load the flipbook slowly or need a second click).
@@ -1255,17 +1277,16 @@ class MagazineDownloader:
                 _try_click(trigger)
             # Wait up to 12s per attempt for the download button to appear
             try:
-                btn_el = WebDriverWait(self._driver, 12).until(
-                    EC.presence_of_element_located(
-                        (By.CSS_SELECTOR, "span[data-name='btnDownloadPdf']")
-                    )
-                )
+                btn_el = WebDriverWait(self._driver, 12).until(_find_download_control)
                 break  # found it
             except Exception:
                 pass  # not yet — try clicking again
 
         if btn_el is None:
-            return False, "Flipbook download button never appeared after multiple attempts"
+            return False, (
+                "Flipbook download button never appeared after multiple attempts: "
+                f"{issue_url}"
+            )
 
         # Give the reader a brief moment after the button appears
         time.sleep(1)
@@ -1311,7 +1332,10 @@ class MagazineDownloader:
                 return self._rename_and_move(new_path, dest_dir, hint_prefix, flat=flat)
             time.sleep(1.5)
 
-        return False, "Flipbook download timed out (no file appeared within 90s)"
+        return False, (
+            "Flipbook download timed out (no file appeared within 90s): "
+            f"{issue_url}"
+        )
 
     def _fetch_pdf(self, url: str, dest_dir: str, hint_prefix: str | None,
                    cookies: dict, flat: bool = False) -> tuple[bool, str]:

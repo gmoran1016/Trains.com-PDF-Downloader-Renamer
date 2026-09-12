@@ -49,6 +49,27 @@ class FakeDriver:
         return [FakeElement(href=href) for href in self.hrefs]
 
 
+class ModeDriver(FakeDriver):
+    def __init__(self, *, direct_href=None, pdf_edition=False, read_magazine=False):
+        super().__init__()
+        self.direct_href = direct_href
+        self.pdf_edition = pdf_edition
+        self.read_magazine = read_magazine
+
+    def find_elements(self, _by, selector):
+        if selector == "a.ci-btn--secondary[href]":
+            return [FakeElement(href=self.direct_href)] if self.direct_href else []
+        if "normalize-space(.)='Download'" in selector:
+            return [FakeElement(href=self.direct_href)] if self.direct_href else []
+        if selector == "div.ci-media__cover":
+            return []
+        if "Read Magazine" in selector:
+            return [FakeElement(text="Read Magazine")] if self.read_magazine else []
+        if "PDF Edition" in selector:
+            return [FakeElement(text="PDF Edition")] if self.pdf_edition else []
+        return []
+
+
 def _downloader(driver):
     downloader = object.__new__(MagazineDownloader)
     downloader._driver = driver
@@ -121,3 +142,38 @@ def test_special_redirect_can_be_reported_as_empty():
         hint_prefix="GRW",
         allow_empty=True,
     ) == []
+
+
+def test_detect_download_mode_keeps_direct_downloads():
+    from trains_app import detect_download_mode
+
+    mode, href = detect_download_mode(
+        ModeDriver(direct_href="https://cdn.example/MAG-MRR-OCT26.pdf")
+    )
+
+    assert mode == "mode1"
+    assert href.endswith("MAG-MRR-OCT26.pdf")
+
+
+def test_detect_download_mode_recognizes_pdf_edition_viewer():
+    from trains_app import detect_download_mode
+
+    mode, href = detect_download_mode(ModeDriver(pdf_edition=True))
+
+    assert (mode, href) == ("mode2", None)
+
+
+def test_download_issue_uses_current_pdf_edition_viewer(monkeypatch, tmp_path):
+    driver = ModeDriver(pdf_edition=True)
+    downloader = _downloader(driver)
+    downloader.download_dir = str(tmp_path / "raw")
+    downloader._flipbook_download = lambda *args, **kwargs: (True, "viewer.pdf")
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    result = downloader.download_issue(
+        "https://www.trains.com/grw/magazine/fall-2020/",
+        str(tmp_path / "organized"),
+        hint_prefix="GRW",
+    )
+
+    assert result == (True, "viewer.pdf")
