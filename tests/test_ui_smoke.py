@@ -35,9 +35,9 @@ def test_redesigned_shell_has_scrollable_pages_and_navigation(qapp):
 
 
 def test_release_version_is_bumped_and_visible_in_window_chrome(window):
-    assert APP_VERSION == "1.8.1"
-    assert "v1.8.1" in window.windowTitle()
-    assert any(label.text() == "v1.8.1" for label in window.findChildren(QLabel))
+    assert APP_VERSION == "1.8.2"
+    assert "v1.8.2" in window.windowTitle()
+    assert any(label.text() == "v1.8.2" for label in window.findChildren(QLabel))
 
 
 def test_high_end_palette_uses_paper_ink_and_copper_tokens(qapp):
