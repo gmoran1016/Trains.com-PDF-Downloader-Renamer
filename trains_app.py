@@ -2293,6 +2293,9 @@ QFrame[role="card"] {
     border-radius: 12px;
 }
 QFrame[role="card"] > QLabel[role="card-title"] { color: #182126; font-size: 11pt; font-weight: 800; }
+QFrame#magazine_row { background: #F8F5EF; }
+QLabel#magazine_prefix { color: #203B4A; font-size: 9pt; font-weight: 800; }
+QLabel#summary_value { color: #203B4A; font-size: 18pt; font-weight: 800; }
 QLineEdit, QComboBox {
     background: #FFFDF8;
     border: 1px solid #A9A59B;
@@ -2322,7 +2325,9 @@ QPushButton:disabled, QToolButton:disabled { background: #E5E1D8; color: #879092
 QPushButton:focus, QToolButton:focus, QCheckBox:focus { border: 2px solid #C7792B; }
 QPushButton[role="primary"] { background: #C7792B; border-color: #A96220; color: #FFFDF8; font-weight: 800; min-height: 42px; }
 QPushButton[role="primary"]:hover { background: #A96220; }
+QPushButton[role="primary"]:disabled { background: #E5E1D8; border-color: #D0CBC1; color: #879092; }
 QPushButton[role="danger"] { background: #F7E7E4; border-color: #D9A9A2; color: #B4483E; }
+QPushButton[role="danger"]:disabled { background: #E5E1D8; border-color: #D0CBC1; color: #879092; }
 QCheckBox { color: #182126; spacing: 8px; min-height: 36px; }
 QCheckBox::indicator { width: 18px; height: 18px; border: 2px solid #7C878A; border-radius: 4px; background: #FFFDF8; }
 QCheckBox::indicator:hover { border-color: #C7792B; }
@@ -2719,7 +2724,6 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._activity_splitter, 1)
 
         self.cookie_edit.textChanged.connect(self._save_settings)
-        self.org_headless_cb.stateChanged.connect(self._save_settings)
         self._set_mode("download")
 
     def _make_header(self) -> QWidget:
@@ -2824,9 +2828,6 @@ class MainWindow(QMainWindow):
         row.addWidget(self.cookie_edit, 1)
         row.addWidget(browse)
         layout.addLayout(row)
-        self.org_headless_cb = QCheckBox("Hide browser for missing-issue downloads")
-        self.org_headless_cb.setAccessibleName("Hide browser for missing-issue downloads")
-        layout.addWidget(self.org_headless_cb)
         return card
 
     @staticmethod
@@ -3216,6 +3217,21 @@ class MainWindow(QMainWindow):
         identification_layout.addWidget(self.prefix_combo)
         layout.addWidget(identification)
 
+        browser_options = QFrame()
+        browser_options.setProperty("role", "card")
+        browser_options_layout = QVBoxLayout(browser_options)
+        browser_options_layout.setContentsMargins(16, 12, 16, 12)
+        browser_options_layout.setSpacing(5)
+        browser_options_layout.addWidget(self._make_card_title(
+            "Missing-issue browser",
+            "Keep the browser visible while signing in; hide it only after the cookie file is saved.",
+        ))
+        self.org_headless_cb = QCheckBox("Hide browser for missing-issue downloads")
+        self.org_headless_cb.setAccessibleName("Hide browser for missing-issue downloads")
+        self.org_headless_cb.stateChanged.connect(self._save_settings)
+        browser_options_layout.addWidget(self.org_headless_cb)
+        layout.addWidget(browser_options)
+
         self._organize_summary = QFrame()
         self._organize_summary.setProperty("role", "card")
         self._organize_summary.setVisible(False)
@@ -3283,6 +3299,7 @@ class MainWindow(QMainWindow):
             self.src_edit,
             self.dst_edit,
             self.prefix_combo,
+            self.org_headless_cb,
         ]
         return content
 

@@ -59,6 +59,7 @@ def test_download_page_has_readable_magazine_rows_and_primary_controls(window):
     assert window.dir_edit.isVisible()
     assert window.cookie_edit.isVisible()
     assert window.headless_cb.isVisible()
+    assert not window.org_headless_cb.isVisible()
     assert window.test_cb.isVisible()
     assert window.specials_cb.isVisible()
     assert window.sort_combo.isVisible()
@@ -128,6 +129,20 @@ def test_all_visible_interactive_controls_have_accessible_names(window):
     )
     assert controls
     assert all(control.accessibleName() for control in controls if control.isVisible())
+
+
+def test_compact_layout_keeps_workflows_and_activity_available(window, qt_app):
+    window.resize(800, 620)
+    window.show()
+    qt_app.processEvents()
+    assert window.width() >= 800
+    assert window.height() >= 620
+    assert window.findChild(type(window._download_page), "download_scroll") is not None
+    assert window.findChild(type(window._organize_page), "organize_scroll") is not None
+    assert window.start_btn.isVisible()
+    assert window._activity_panel.isVisible()
+    assert not window._page_stack.currentWidget().horizontalScrollBar().isVisible()
+    assert all(row.width() > 0 for row in window.magazine_rows.values())
 
 
 @pytest.fixture(scope="session")
@@ -204,6 +219,8 @@ def test_action_controls_have_accessible_names_and_plain_text(window):
     assert all(control.accessibleName() for control in controls)
     assert not any(icon in window.start_btn.text() for icon in ("▶", "■", "⬇"))
     assert not any(icon in window.stop_btn.text() for icon in ("▶", "■", "⬇"))
+    assert 'QPushButton[role="primary"]:disabled' in _STYLESHEET
+    assert 'QPushButton[role="danger"]:disabled' in _STYLESHEET
 
 
 def test_log_filter_copy_errors_and_badge(window, qt_app):

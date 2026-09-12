@@ -32,7 +32,8 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 ## Features
 
-- **GUI interface** — select magazines, set save location, and monitor progress
+- **Workstation UI** — separate Download and Organize workflows with readable magazine rows, shared archive access, and a resizable activity drawer
+- **Visible organizer results** — moved, existing, unrecognized, corrupt, conflict, metadata, and missing-issue counts are shown in the workspace
 - **All three download modes** handled automatically:
   - Recent issues via direct PDF link (downloaded in parallel — up to 3 at once)
   - Mid-era issues via the embedded flipbook reader
@@ -40,7 +41,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 - **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
 - **Cookie-based authentication** — log in once and sessions are reused across runs
 - **Settings persistence** — save location, cookies path, headless mode, sort order, and magazine selections are remembered between sessions
-- **Per-magazine progress bars** — stacked progress bars show each magazine's download progress with an ETA estimate
+- **Per-magazine progress rows** — the resizable activity drawer shows each magazine's download progress with an ETA estimate
 - **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel
 - **Built-in PDF organizer** — renames and sorts PDFs into `YYYY/` subfolders with consistent naming (`MRR-01-January-2024.pdf`)
 - **PDF integrity verification** — downloaded files are validated with pypdf; corrupt or truncated organizer inputs stay in the source folder and are reported instead of being moved
@@ -48,7 +49,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 - **PDF metadata stamping** — writes correct Title, Subject, Keywords, and Creation Date into each PDF's info dictionary and XMP metadata
 - **Smart completeness report** — after organizing, lists missing issues per magazine and year using known publication schedules; seasonal/variable archives are reported without inventing monthly gaps
 - **Download missing issues** — after a single-magazine organization run, fetch only the missing issues using the same download engine
-- **Smarter log panel** — live filter field, error badge showing failure count, and a "Copy Errors" button; log lines are color-coded (errors in red, successful moves in green, skipped issues dimmed)
+- **Smarter activity drawer** — resize it without losing the workflow, filter live output, review the error badge, copy failures, and clear the log; lines remain color-coded (errors in red, successful moves in green, skipped issues dimmed)
 - **Sort order** — choose newest-first or oldest-first
 - **Test mode** — scans only the first 3 archive pages for quick testing
 - **Headless mode** — hide the browser window (requires valid saved cookies)
@@ -57,7 +58,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 ## Authentication
 
-A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json`, leave **Hide download browser** unchecked, and click **Start Download**. Chrome will open for you to log in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
+A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json`, leave **Hide download browser** unchecked, and click **Start download**. Chrome will open for you to log in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
 
 ---
 
@@ -131,6 +132,7 @@ pytest.ini                     # pytest config
 tests/
   test_trains_app.py           # unit tests for settings, PDF and organizer behavior
   test_ui_smoke.py             # offscreen Qt construction/layout smoke tests
+  render_ui.py                 # native Windows screenshot harness for visual QA
 .github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push to main
 docs/superpowers/              # design specs and implementation plans
 docs/usability-audit-2026-08-08.md  # QA findings and remediation evidence
