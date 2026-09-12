@@ -34,7 +34,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog, QTextEdit,
     QProgressBar, QComboBox, QMessageBox, QMenu, QSystemTrayIcon,
-    QButtonGroup, QFrame, QScrollArea, QSizePolicy, QSplitter,
+    QButtonGroup, QFrame, QScrollArea, QSplitter,
     QStackedWidget, QToolButton,
 )
 from PyQt5.QtCore import pyqtSignal, QObject, QThread, Qt
