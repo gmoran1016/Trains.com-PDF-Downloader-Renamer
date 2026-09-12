@@ -1104,7 +1104,7 @@ class MagazineDownloader:
             src = self._driver.page_source.lower()
             return any(k in src for k in (
                 "log out", "logout", "sign out", "my account",
-                "your account", "hello,", "my benefits",
+                "hello,", "my benefits",
             ))
         except Exception as e:
             logger.error(f"Login check error: {e}")
@@ -1122,7 +1122,7 @@ class MagazineDownloader:
             src = self._driver.page_source.lower()
             if any(k in src for k in (
                 "log out", "logout", "sign out", "my account",
-                "your account", "hello,", "my benefits",
+                "hello,", "my benefits",
             )):
                 self._log("Login detected.")
                 return True

@@ -368,6 +368,21 @@ def test_login_detection_accepts_current_account_surface():
     assert downloader.is_logged_in() is True
 
 
+def test_login_detection_does_not_accept_generic_account_link():
+    from trains_app import MagazineDownloader
+
+    class LoggedOutDriver:
+        page_source = "<footer><a>Your Account</a></footer>"
+
+        def get(self, _url):
+            return None
+
+    downloader = object.__new__(MagazineDownloader)
+    downloader._driver = LoggedOutDriver()
+
+    assert downloader.is_logged_in() is False
+
+
 def test_cancel_pending_futures_only_cancels_not_started_work():
     from concurrent.futures import Future
     from trains_app import cancel_pending_futures
