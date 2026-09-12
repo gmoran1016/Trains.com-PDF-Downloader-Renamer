@@ -477,6 +477,7 @@ PREFIX_TO_TITLE: dict[str, str] = {
 PREFIX_ISSUE_MONTHS: dict[str, list[str]] = {
     "CTR": ["March", "June", "September", "December"],  # quarterly
 }
+SEASONAL_PREFIXES = frozenset({"GRW"})
 
 # Non-standard abbreviations not covered by the 3-letter calendar set
 EXTRA_MONTH_ABBR: dict[str, tuple[str, int]] = {
@@ -500,7 +501,7 @@ SEASON_TO_MONTH: dict[str, tuple[str, int]] = {
 }
 
 
-def _guess_prefix(filename: str) -> str:
+def _guess_prefix(filename: str) -> str | None:
     low = filename.lower()
     if re.search(r"\btrn\b|trains\s+magazine", low):
         return "TRN"
@@ -510,7 +511,9 @@ def _guess_prefix(filename: str) -> str:
         return "CTR"
     if re.search(r"\bgrw\b|garden\s+rail", low):
         return "GRW"
-    return "MRR"
+    if re.search(r"\bmrr\b|model\s+railroader", low):
+        return "MRR"
+    return None
 
 
 def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
@@ -523,6 +526,8 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
         return None
 
     prefix = hint_prefix or _guess_prefix(name)
+    if not prefix:
+        return None
 
     # Pattern 0: MM-FullMonthName-YYYY (already-formatted files, e.g. MRR-01-January-1934)
     m = re.search(r"(\d{1,2})[_\-]([A-Za-z]+)[_\-](\d{4})(?:\D|$)", name)
@@ -942,8 +947,18 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
     today = datetime.date.today()
     for prefix in sorted(issues_by_prefix_year):
         years = issues_by_prefix_year[prefix]
-        expected_months = _detect_issue_frequency(years) \
-            or PREFIX_ISSUE_MONTHS.get(prefix, ALL_MONTHS)
+        expected_months = _detect_issue_frequency(years)
+        if expected_months is None and prefix in PREFIX_ISSUE_MONTHS:
+            expected_months = PREFIX_ISSUE_MONTHS[prefix]
+        if expected_months is None and prefix in SEASONAL_PREFIXES:
+            for year in sorted(years):
+                summary.missing_by_prefix_year.setdefault(prefix, {})[year] = []
+                summary.report.append(
+                    f"{prefix} {year}: schedule unknown/seasonal; completeness not inferred"
+                )
+            continue
+        if expected_months is None:
+            expected_months = ALL_MONTHS
         for year in sorted(years):
             yr_int = int(year)
             missing = [

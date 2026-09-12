@@ -192,6 +192,29 @@ def test_missing_download_selection_requires_one_publication():
     )
 
 
+def test_ambiguous_filename_does_not_default_to_mrr():
+    from trains_app import _guess_prefix, parse_pdf_filename
+
+    assert _guess_prefix("fall-2020.pdf") is None
+    assert parse_pdf_filename("fall-2020.pdf") is None
+    assert parse_pdf_filename("fall-2020.pdf", hint_prefix="GRW")[0].startswith("GRW-")
+
+
+def test_grw_insufficient_schedule_evidence_is_not_monthly(tmp_path):
+    from trains_app import organize_pdfs
+
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    (src / "fall-2020.pdf").write_bytes(_make_valid_pdf_bytes())
+
+    summary = organize_pdfs(str(src), str(dst), hint_prefix="GRW")
+
+    assert summary.missing_by_prefix_year["GRW"]["2020"] == []
+    assert any("GRW 2020: schedule unknown/seasonal" in line for line in summary.report)
+
+
 # ---------------------------------------------------------------------------
 # _handle_result  (added in Task 4)
 # ---------------------------------------------------------------------------

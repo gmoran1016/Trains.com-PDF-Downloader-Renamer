@@ -26,7 +26,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 | Trains Magazine | TRN | Monthly |
 | Classic Toy Trains | CTT | Monthly |
 | Classic Trains | CTR | Quarterly (Mar/Jun/Sep/Dec) |
-| Garden Railways | GRW | Monthly |
+| Garden Railways | GRW | Seasonal / archived (variable) |
 
 ---
 
@@ -46,7 +46,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 - **PDF integrity verification** — downloaded files are validated with pypdf; corrupt or truncated organizer inputs stay in the source folder and are reported instead of being moved
 - **Conflict-safe organization** — duplicate issue targets are preserved with an explicit conflict count and log entry
 - **PDF metadata stamping** — writes correct Title, Subject, Keywords, and Creation Date into each PDF's info dictionary and XMP metadata
-- **Smart completeness report** — after organizing, lists missing issues per magazine and year using each publication's schedule (monthly, quarterly, etc.)
+- **Smart completeness report** — after organizing, lists missing issues per magazine and year using known publication schedules; seasonal/variable archives are reported without inventing monthly gaps
 - **Download missing issues** — after a single-magazine organization run, fetch only the missing issues using the same download engine
 - **Smarter log panel** — live filter field, error badge showing failure count, and a "Copy Errors" button; log lines are color-coded (errors in red, successful moves in green, skipped issues dimmed)
 - **Sort order** — choose newest-first or oldest-first

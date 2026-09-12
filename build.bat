@@ -12,7 +12,17 @@ set PIP=.venv\Scripts\pip.exe
 :: Install / upgrade PyInstaller and all project dependencies inside the venv
 echo Installing dependencies...
 %PIP% install --quiet --upgrade pyinstaller
-%PIP% install --quiet -r requirements.txt
+%PIP% install --quiet -r requirements-dev.txt
+
+:: Run the same regression suite used by CI before producing an executable.
+echo Running tests...
+%PYTHON% -m pytest tests/ -q
+if errorlevel 1 (
+    echo.
+    echo TESTS FAILED -- build stopped.
+    pause
+    exit /b 1
+)
 
 :: Clean previous build artifacts
 if exist build  rmdir /s /q build
