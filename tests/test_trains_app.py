@@ -215,6 +215,14 @@ def test_grw_insufficient_schedule_evidence_is_not_monthly(tmp_path):
     assert any("GRW 2020: schedule unknown/seasonal" in line for line in summary.report)
 
 
+def test_parse_full_month_archive_slug():
+    from trains_app import parse_pdf_filename
+
+    assert parse_pdf_filename("october-2026.pdf", hint_prefix="MRR") == (
+        "MRR-10-October-2026", "2026", "October"
+    )
+
+
 # ---------------------------------------------------------------------------
 # _handle_result  (added in Task 4)
 # ---------------------------------------------------------------------------

@@ -529,6 +529,33 @@ def parse_pdf_filename(filepath: str, hint_prefix: str | None = None):
     if not prefix:
         return None
 
+    # Archive slugs use full month names, e.g. "october-2026".
+    full_month_pattern = "|".join(re.escape(month) for month in ALL_MONTHS)
+    m = re.search(
+        rf"({full_month_pattern})[_\-](\d{{4}})(?:\D|$)",
+        name,
+        re.IGNORECASE,
+    )
+    if m:
+        mname = m.group(1).capitalize()
+        year = int(m.group(2))
+        if 1800 <= year <= 2200:
+            mnum = MONTH_NUM_FROM_NAME[mname]
+            return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
+
+    # Also accept the less common year-first spelling, e.g. "2026-october".
+    m = re.search(
+        rf"(\d{{4}})[_\-]({full_month_pattern})(?:\D|$)",
+        name,
+        re.IGNORECASE,
+    )
+    if m:
+        year = int(m.group(1))
+        mname = m.group(2).capitalize()
+        if 1800 <= year <= 2200:
+            mnum = MONTH_NUM_FROM_NAME[mname]
+            return f"{prefix}-{mnum:02d}-{mname}-{year}", str(year), mname
+
     # Pattern 0: MM-FullMonthName-YYYY (already-formatted files, e.g. MRR-01-January-1934)
     m = re.search(r"(\d{1,2})[_\-]([A-Za-z]+)[_\-](\d{4})(?:\D|$)", name)
     if m:
