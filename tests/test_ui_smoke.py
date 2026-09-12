@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from trains_app import MainWindow, _STYLESHEET
+from trains_app import MAGAZINES, MainWindow, _STYLESHEET
 
 
 def test_redesigned_shell_has_scrollable_pages_and_navigation(qapp):
@@ -40,6 +40,29 @@ def test_navigation_switches_workflow_pages(qapp):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_download_page_has_readable_magazine_rows_and_primary_controls(window):
+    assert set(window.mag_chips) == set(MAGAZINES)
+    assert len(window.magazine_rows) == 5
+    assert window.select_all_btn.isVisible()
+    assert window.clear_all_btn.isVisible()
+    assert window.start_btn.text() == "Start download"
+    assert window.dir_edit.isVisible()
+    assert window.cookie_edit.isVisible()
+    assert window.headless_cb.isVisible()
+    assert window.test_cb.isVisible()
+    assert window.specials_cb.isVisible()
+    assert window.sort_combo.isVisible()
+
+
+def test_select_all_and_clear_all_preserve_settings_mapping(window, qt_app):
+    window.clear_all_btn.click()
+    qt_app.processEvents()
+    assert not any(button.isChecked() for button in window.mag_chips.values())
+    window.select_all_btn.click()
+    qt_app.processEvents()
+    assert all(button.isChecked() for button in window.mag_chips.values())
 
 
 @pytest.fixture(scope="session")
@@ -81,23 +104,19 @@ def test_first_launch_guidance_distinguishes_browser_modes(qapp):
         window.deleteLater()
 
 
-def test_magazine_selector_wraps_and_section_labels_have_contrast_support(qapp):
+def test_magazine_selector_rows_and_section_cards_have_contrast_support(qapp):
     window = MainWindow()
     try:
-        window.resize(640, 520)
+        window.resize(800, 620)
         window.show()
         qapp.processEvents()
-        assert window.width() >= 640
-        assert window.height() >= 520
+        assert window.width() >= 800
+        assert window.height() >= 620
         assert all(button.isVisible() for button in window.mag_chips.values())
-        assert hasattr(window, "magazine_grid")
-        rows = {
-            window.magazine_grid.getItemPosition(index)[0]
-            for index in range(window.magazine_grid.count())
-        }
-        assert len(rows) > 1
-        assert "QLabel[role=\"section\"]" in _STYLESHEET
-        assert "color: #a6adc8" in _STYLESHEET
+        assert len(window.magazine_rows) == 5
+        assert all(row.isVisible() for row in window.magazine_rows.values())
+        assert "QFrame[role=\"card\"]" in _STYLESHEET
+        assert "#F4F1EA" in _STYLESHEET
     finally:
         window.close()
         window.deleteLater()

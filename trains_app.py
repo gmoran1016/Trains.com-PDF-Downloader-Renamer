@@ -85,6 +85,13 @@ MAGAZINES = {
         "prefix": "GRW",
     },
 }
+MAGAZINE_SCHEDULE = {
+    "Model Railroader": "Monthly",
+    "Trains Magazine": "Monthly",
+    "Classic Toy Trains": "Monthly",
+    "Classic Trains": "Quarterly",
+    "Garden Railways": "Seasonal / archived",
+}
 
 # Path segments that are not individual issue pages
 _NON_ISSUE_SLUGS = frozenset({
@@ -2913,6 +2920,228 @@ class MainWindow(QMainWindow):
             [max(260, total - (330 if expanded else 190)), 330 if expanded else 190]
         )
 
+    @staticmethod
+    def _make_page_heading(title_text: str, description: str) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(4, 2, 4, 6)
+        layout.setSpacing(3)
+        title = QLabel(title_text)
+        title.setProperty("role", "page-title")
+        subtitle = QLabel(description)
+        subtitle.setProperty("role", "page-description")
+        subtitle.setWordWrap(True)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+        return widget
+
+    @staticmethod
+    def _make_card_title(title_text: str, description: str = "") -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 4)
+        layout.setSpacing(2)
+        title = QLabel(title_text)
+        title.setProperty("role", "card-title")
+        layout.addWidget(title)
+        if description:
+            subtitle = QLabel(description)
+            subtitle.setProperty("role", "muted")
+            subtitle.setWordWrap(True)
+            layout.addWidget(subtitle)
+        return widget
+
+    def _make_path_card(
+        self,
+        label_text: str,
+        helper_text: str,
+        target: QLineEdit,
+        browse_slot,
+    ) -> QFrame:
+        card = QFrame()
+        card.setProperty("role", "card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 13, 16, 13)
+        layout.setSpacing(7)
+        layout.addWidget(self._make_card_title(label_text, helper_text))
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        browse = QPushButton("Browse…")
+        browse.setAccessibleName(f"Browse for {label_text.lower()}")
+        browse.clicked.connect(browse_slot)
+        row.addWidget(target, 1)
+        row.addWidget(browse)
+        layout.addLayout(row)
+        return card
+
+    def _make_magazine_row(self, name: str) -> QFrame:
+        row = QFrame()
+        row.setObjectName("magazine_row")
+        row.setProperty("role", "card")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(12, 7, 12, 7)
+        row_layout.setSpacing(12)
+        checkbox = QCheckBox(name)
+        checkbox.setChecked(True)
+        checkbox.setAccessibleName(f"Select {name} magazine")
+        checkbox.setToolTip(f"Include {name} in the archive download")
+        checkbox.toggled.connect(self._save_settings)
+        self.mag_chips[name] = checkbox
+        row_layout.addWidget(checkbox, 1)
+        prefix = QLabel(MAGAZINES[name]["prefix"])
+        prefix.setObjectName("magazine_prefix")
+        prefix.setAlignment(Qt.AlignCenter)
+        prefix.setMinimumWidth(42)
+        schedule = QLabel(MAGAZINE_SCHEDULE[name])
+        schedule.setProperty("role", "muted")
+        schedule.setMinimumWidth(126)
+        schedule.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row_layout.addWidget(prefix)
+        row_layout.addWidget(schedule)
+        return row
+
+    def _select_all_magazines(self):
+        for checkbox in self.mag_chips.values():
+            checkbox.setChecked(True)
+
+    def _clear_all_magazines(self):
+        for checkbox in self.mag_chips.values():
+            checkbox.setChecked(False)
+
+    def _toggle_advanced_options(self, expanded: bool):
+        self._advanced_options_body.setVisible(expanded)
+        self._advanced_options_toggle.setText(
+            "Advanced options  ▾" if expanded else "Advanced options  ▸"
+        )
+
+    def _make_download_panel(self) -> QWidget:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 12)
+        layout.setSpacing(12)
+        layout.addWidget(self._make_page_heading(
+            "Download magazines",
+            "Choose the publications and archive options to save locally.",
+        ))
+
+        selection = QFrame()
+        selection.setProperty("role", "card")
+        selection_layout = QVBoxLayout(selection)
+        selection_layout.setContentsMargins(16, 13, 16, 13)
+        selection_layout.setSpacing(7)
+        selection_header = QHBoxLayout()
+        selection_header.addWidget(self._make_card_title(
+            "Publications",
+            "Select one or more magazines. Each archive is saved under its prefix.",
+        ), 1)
+        self.select_all_btn = QPushButton("Select all")
+        self.select_all_btn.setAccessibleName("Select all magazines")
+        self.select_all_btn.clicked.connect(self._select_all_magazines)
+        self.clear_all_btn = QPushButton("Clear all")
+        self.clear_all_btn.setAccessibleName("Clear all magazines")
+        self.clear_all_btn.clicked.connect(self._clear_all_magazines)
+        selection_header.addWidget(self.select_all_btn)
+        selection_header.addWidget(self.clear_all_btn)
+        selection_layout.addLayout(selection_header)
+        self.mag_chips = {}
+        self.magazine_rows = {}
+        for name in MAGAZINES:
+            row = self._make_magazine_row(name)
+            self.magazine_rows[name] = row
+            selection_layout.addWidget(row)
+        layout.addWidget(selection)
+
+        self.dir_edit = QLineEdit(str(Path.home() / "Downloads" / "TrainsMagazines"))
+        self.dir_edit.setAccessibleName("Save location folder")
+        self.dir_edit.setPlaceholderText("Choose a folder for downloaded magazines")
+        layout.addWidget(self._make_path_card(
+            "Save location",
+            "PDFs are organized into magazine and year folders after download.",
+            self.dir_edit,
+            self._browse_dir,
+        ))
+
+        advanced = QFrame()
+        advanced.setProperty("role", "card")
+        advanced_layout = QVBoxLayout(advanced)
+        advanced_layout.setContentsMargins(16, 10, 16, 12)
+        advanced_layout.setSpacing(6)
+        self._advanced_options_toggle = QToolButton()
+        self._advanced_options_toggle.setText("Advanced options  ▾")
+        self._advanced_options_toggle.setCheckable(True)
+        self._advanced_options_toggle.setChecked(True)
+        self._advanced_options_toggle.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._advanced_options_toggle.setAccessibleName("Toggle advanced download options")
+        self._advanced_options_toggle.toggled.connect(self._toggle_advanced_options)
+        advanced_layout.addWidget(self._advanced_options_toggle)
+        self._advanced_options_body = QWidget()
+        options_layout = QVBoxLayout(self._advanced_options_body)
+        options_layout.setContentsMargins(0, 2, 0, 0)
+        options_layout.setSpacing(2)
+        self.specials_cb = QCheckBox("Include special issues")
+        self.specials_cb.setChecked(True)
+        self.specials_cb.setAccessibleName("Include special issues")
+        self.test_cb = QCheckBox("Test mode: scan only the first few archive pages")
+        self.test_cb.setAccessibleName("Test mode")
+        self.headless_cb = QCheckBox("Hide download browser")
+        self.headless_cb.setAccessibleName("Hide download browser")
+        self.headless_cb.setToolTip("Requires a valid saved cookie file.")
+        for checkbox in (self.specials_cb, self.test_cb, self.headless_cb):
+            checkbox.stateChanged.connect(self._save_settings)
+            options_layout.addWidget(checkbox)
+        order_row = QHBoxLayout()
+        order_label = QLabel("Issue order")
+        order_label.setProperty("role", "muted")
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Newest first", "Oldest first"])
+        self.sort_combo.setAccessibleName("Issue order")
+        self.sort_combo.setMinimumWidth(150)
+        self.sort_combo.currentIndexChanged.connect(self._save_settings)
+        order_row.addWidget(order_label)
+        order_row.addWidget(self.sort_combo)
+        order_row.addStretch()
+        options_layout.addLayout(order_row)
+        advanced_layout.addWidget(self._advanced_options_body)
+        layout.addWidget(advanced)
+
+        self.download_validation = QLabel("")
+        self.download_validation.setProperty("role", "status")
+        self.download_validation.setAccessibleName("Download validation message")
+        self.download_validation.setWordWrap(True)
+        layout.addWidget(self.download_validation)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.start_btn = QPushButton("Start download")
+        self.start_btn.setProperty("role", "primary")
+        self.start_btn.setAccessibleName("Start download")
+        self.start_btn.clicked.connect(self._start_download)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setProperty("role", "danger")
+        self.stop_btn.setAccessibleName("Stop download")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._stop_download)
+        self._clear_btn = QPushButton("Clear cache")
+        self._clear_btn.setAccessibleName("Clear download cache")
+        self._clear_btn.clicked.connect(self._clear_progress)
+        actions.addWidget(self.start_btn, 2)
+        actions.addWidget(self.stop_btn, 1)
+        actions.addWidget(self._clear_btn, 1)
+        layout.addLayout(actions)
+        self.dir_edit.textChanged.connect(self._save_settings)
+        self._download_config_controls = [
+            *self.mag_chips.values(),
+            self.select_all_btn,
+            self.clear_all_btn,
+            self.dir_edit,
+            self._advanced_options_toggle,
+            self.specials_cb,
+            self.test_cb,
+            self.headless_cb,
+            self.sort_combo,
+        ]
+        return content
+
     # -- Helpers --------------------------------------------------------------
     @staticmethod
     def _disconnect_worker(worker) -> None:
@@ -3046,13 +3275,16 @@ class MainWindow(QMainWindow):
 
         magazines = [n for n, btn in self.mag_chips.items() if btn.isChecked()]
         if not magazines:
+            self.download_validation.setText("Select at least one magazine to continue.")
             QMessageBox.warning(self, "Nothing selected", "Select at least one magazine.")
             return
 
         base_dir = self.dir_edit.text().strip()
         if not base_dir:
+            self.download_validation.setText("Choose a save location to continue.")
             QMessageBox.warning(self, "No folder", "Please choose a save location.")
             return
+        self.download_validation.clear()
 
         cookies  = self.cookie_edit.text().strip() or None
         headless = self.headless_cb.isChecked()
@@ -3062,6 +3294,8 @@ class MainWindow(QMainWindow):
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        for control in self._download_config_controls:
+            control.setEnabled(False)
         self._reset_magazine_progress()
         self.progress_bar.setValue(0)
         self.progress_bar.setMaximum(1)
@@ -3099,6 +3333,8 @@ class MainWindow(QMainWindow):
     def _on_finished(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        for control in self._download_config_controls:
+            control.setEnabled(True)
         self.progress_bar.setVisible(False)
         self.magazine_progress_panel.setVisible(False)
         outcome = getattr(self.worker, "outcome", OUTCOME_FAILED)
