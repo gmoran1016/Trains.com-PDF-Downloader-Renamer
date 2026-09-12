@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QToolButton,
 )
 
-from trains_app import MAGAZINES, MainWindow, OrganizeSummary, _STYLESHEET
+from trains_app import APP_VERSION, MAGAZINES, MainWindow, OrganizeSummary, _STYLESHEET
 
 
 def test_redesigned_shell_has_scrollable_pages_and_navigation(qapp):
@@ -32,6 +32,12 @@ def test_redesigned_shell_has_scrollable_pages_and_navigation(qapp):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_release_version_is_bumped_and_visible_in_window_chrome(window):
+    assert APP_VERSION == "1.8.0"
+    assert "v1.8.0" in window.windowTitle()
+    assert any(label.text() == "v1.8.0" for label in window.findChildren(QLabel))
 
 
 def test_navigation_switches_workflow_pages(qapp):
