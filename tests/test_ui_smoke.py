@@ -35,9 +35,21 @@ def test_redesigned_shell_has_scrollable_pages_and_navigation(qapp):
 
 
 def test_release_version_is_bumped_and_visible_in_window_chrome(window):
-    assert APP_VERSION == "1.8.0"
-    assert "v1.8.0" in window.windowTitle()
-    assert any(label.text() == "v1.8.0" for label in window.findChildren(QLabel))
+    assert APP_VERSION == "1.8.1"
+    assert "v1.8.1" in window.windowTitle()
+    assert any(label.text() == "v1.8.1" for label in window.findChildren(QLabel))
+
+
+def test_high_end_palette_uses_paper_ink_and_copper_tokens(qapp):
+    window = MainWindow()
+    try:
+        assert "background-color: #F6F3EC;" in _STYLESHEET
+        assert "background: #FFFCF7;" in _STYLESHEET
+        assert 'QPushButton[role="primary"] { background: #A95530;' in _STYLESHEET
+        assert "#183B49" in _STYLESHEET
+    finally:
+        window.close()
+        window.deleteLater()
 
 
 def test_navigation_switches_workflow_pages(qapp):
@@ -202,7 +214,7 @@ def test_magazine_selector_rows_and_section_cards_have_contrast_support(qapp):
         assert len(window.magazine_rows) == 5
         assert all(row.isVisible() for row in window.magazine_rows.values())
         assert "QFrame[role=\"card\"]" in _STYLESHEET
-        assert "#F4F1EA" in _STYLESHEET
+        assert "#F6F3EC" in _STYLESHEET
     finally:
         window.close()
         window.deleteLater()
