@@ -2077,6 +2077,7 @@ QPushButton {
 QPushButton:hover  { background: #2e2e48; border-color: #89b4fa; color: #cdd6f4; }
 QPushButton:pressed { background: #383858; }
 QPushButton:disabled { background: #181825; color: #45475a; border-color: #252535; }
+QPushButton:focus, QCheckBox:focus { border: 2px solid #89b4fa; }
 
 /* ── Buttons — primary ────────────────────────────────────────────────── */
 QPushButton[role="primary"] {
@@ -2195,6 +2196,8 @@ class MainWindow(QMainWindow):
         self._org_dst:         str                        = ""
         self._org_prefix:      str | None                 = None
         self._missing_by_year: dict[str, list[str]]       = {}
+        self._raw_log_lines: list[str]                    = []
+        self._magazine_progress_rows: dict[str, tuple[QWidget, QProgressBar, QLabel]] = {}
         self._build_ui()
         self._load_settings()
         self._setup_tray()
@@ -2205,8 +2208,8 @@ class MainWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
-        layout.setContentsMargins(20, 20, 20, 16)
-        layout.setSpacing(0)
+        layout.setContentsMargins(14, 14, 14, 12)
+        layout.setSpacing(6)
 
         # ── Mode toggle ──────────────────────────────────────────────────────
         toggle_row = QHBoxLayout()
@@ -2219,6 +2222,8 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.setAutoExclusive(True)
         self._dl_mode_btn.setChecked(True)
+        self._dl_mode_btn.setAccessibleName("Download mode")
+        self._org_mode_btn.setAccessibleName("Organize mode")
         self._dl_mode_btn.clicked.connect(lambda: self._switch_mode("download"))
         self._org_mode_btn.clicked.connect(lambda: self._switch_mode("organize"))
         toggle_row.addWidget(self._dl_mode_btn)
@@ -2247,8 +2252,11 @@ class MainWindow(QMainWindow):
         cookie_lbl = QLabel("COOKIE FILE")
         cookie_lbl.setProperty("role", "section")
         self.cookie_edit = QLineEdit(DEFAULT_COOKIES_FILE)
+        self.cookie_edit.setAccessibleName("Cookie file path")
+        cookie_lbl.setBuddy(self.cookie_edit)
         cookie_browse = QPushButton("Browse…")
         cookie_browse.setFixedWidth(80)
+        cookie_browse.setAccessibleName("Browse for cookie file")
         cookie_browse.clicked.connect(self._browse_cookies)
         cookie_row.addWidget(cookie_lbl)
         cookie_row.addWidget(self.cookie_edit)
@@ -2263,6 +2271,7 @@ class MainWindow(QMainWindow):
         auth_note.setWordWrap(True)
         auth_layout.addWidget(auth_note)
         self.org_headless_cb = QCheckBox("Hide browser for missing-issue downloads")
+        self.org_headless_cb.setAccessibleName("Hide browser for missing-issue downloads")
         auth_layout.addWidget(self.org_headless_cb)
         layout.addWidget(auth_row)
 
@@ -2278,11 +2287,35 @@ class MainWindow(QMainWindow):
         prog_row.addWidget(self.status_label)
         layout.addLayout(prog_row)
 
-        layout.addSpacing(4)
+        self.magazine_progress_panel = QWidget()
+        self.magazine_progress_layout = QVBoxLayout(self.magazine_progress_panel)
+        self.magazine_progress_layout.setContentsMargins(0, 0, 0, 0)
+        self.magazine_progress_layout.setSpacing(3)
+        self.magazine_progress_panel.setVisible(False)
+        layout.addWidget(self.magazine_progress_panel)
 
         # ── Log ──────────────────────────────────────────────────────────────
+        log_toolbar = QHBoxLayout()
+        log_toolbar.setSpacing(6)
+        self.log_filter = QLineEdit()
+        self.log_filter.setPlaceholderText("Filter log…")
+        self.log_filter.setAccessibleName("Log filter")
+        self.log_filter.textChanged.connect(self._refresh_log)
+        self.error_badge = QLabel("0 errors")
+        self.error_badge.setProperty("role", "status")
+        self.error_badge.setAccessibleName("Log error count")
+        self.copy_errors_btn = QPushButton("Copy Errors")
+        self.copy_errors_btn.setAccessibleName("Copy log errors")
+        self.copy_errors_btn.clicked.connect(self._copy_errors)
+        log_toolbar.addWidget(self.log_filter, 1)
+        log_toolbar.addWidget(self.error_badge)
+        log_toolbar.addWidget(self.copy_errors_btn)
+        layout.addLayout(log_toolbar)
+
         self.log = QTextEdit()
         self.log.setReadOnly(True)
+        self.log.setAccessibleName("Activity log")
+        self.log.setMinimumHeight(90)
         layout.addWidget(self.log)
 
         self.cookie_edit.textChanged.connect(self._save_settings)
@@ -2311,6 +2344,7 @@ class MainWindow(QMainWindow):
             btn.setProperty("role", "chip")
             btn.setCheckable(True)
             btn.setChecked(True)
+            btn.setAccessibleName(f"Select {name} magazine")
             btn.toggled.connect(self._save_settings)
             self.mag_chips[name] = btn
             row, column = divmod(index, 3)
@@ -2326,8 +2360,11 @@ class MainWindow(QMainWindow):
         save_row = QHBoxLayout()
         save_row.setSpacing(6)
         self.dir_edit = QLineEdit(str(Path.home() / "Downloads" / "TrainsMagazines"))
+        self.dir_edit.setAccessibleName("Save location folder")
+        save_lbl.setBuddy(self.dir_edit)
         browse_btn = QPushButton("Browse…")
         browse_btn.setFixedWidth(80)
+        browse_btn.setAccessibleName("Browse for save location")
         browse_btn.clicked.connect(self._browse_dir)
         save_row.addWidget(self.dir_edit)
         save_row.addWidget(browse_btn)
@@ -2340,15 +2377,19 @@ class MainWindow(QMainWindow):
         opts_row = QHBoxLayout()
         opts_row.setSpacing(16)
         self.headless_cb = QCheckBox("Hide download browser")
+        self.headless_cb.setAccessibleName("Hide download browser")
         self.headless_cb.setToolTip(
             "Run without a visible browser window.\nRequires a valid saved cookie file."
         )
         self.test_cb = QCheckBox("Test mode")
+        self.test_cb.setAccessibleName("Test mode")
         self.specials_cb = QCheckBox("Special issues")
         self.specials_cb.setChecked(True)
+        self.specials_cb.setAccessibleName("Include special issues")
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Newest first", "Oldest first"])
         self.sort_combo.setFixedWidth(130)
+        self.sort_combo.setAccessibleName("Issue order")
         for widget in (self.headless_cb, self.test_cb, self.specials_cb):
             opts_row.addWidget(widget)
         opts_row.addWidget(self.sort_combo)
@@ -2358,14 +2399,17 @@ class MainWindow(QMainWindow):
         # ── Actions ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self.start_btn = QPushButton("▶  Start Download")
+        self.start_btn = QPushButton("Start Download")
         self.start_btn.setProperty("role", "primary")
+        self.start_btn.setAccessibleName("Start download")
         self.start_btn.clicked.connect(self._start_download)
-        self.stop_btn = QPushButton("■  Stop")
+        self.stop_btn = QPushButton("Stop")
         self.stop_btn.setProperty("role", "danger")
+        self.stop_btn.setAccessibleName("Stop download")
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self._stop_download)
         self._clear_btn = QPushButton("Clear Cache")
+        self._clear_btn.setAccessibleName("Clear download cache")
         self._clear_btn.clicked.connect(self._clear_progress)
         btn_row.addWidget(self.start_btn, 2)
         btn_row.addWidget(self.stop_btn, 1)
@@ -2396,8 +2440,11 @@ class MainWindow(QMainWindow):
         src_row.setSpacing(6)
         self.src_edit = QLineEdit()
         self.src_edit.setPlaceholderText("Folder containing PDFs to organize…")
+        self.src_edit.setAccessibleName("Source folder")
+        src_lbl.setBuddy(self.src_edit)
         src_browse = QPushButton("Browse…")
         src_browse.setFixedWidth(80)
+        src_browse.setAccessibleName("Browse for source folder")
         src_browse.clicked.connect(lambda: self._pick_dir(self.src_edit))
         src_row.addWidget(self.src_edit)
         src_row.addWidget(src_browse)
@@ -2411,8 +2458,11 @@ class MainWindow(QMainWindow):
         dst_row.setSpacing(6)
         self.dst_edit = QLineEdit()
         self.dst_edit.setPlaceholderText("Organized output folder (can be same as source)…")
+        self.dst_edit.setAccessibleName("Destination folder")
+        dst_lbl.setBuddy(self.dst_edit)
         dst_browse = QPushButton("Browse…")
         dst_browse.setFixedWidth(80)
+        dst_browse.setAccessibleName("Browse for destination folder")
         dst_browse.clicked.connect(lambda: self._pick_dir(self.dst_edit))
         dst_row.addWidget(self.dst_edit)
         dst_row.addWidget(dst_browse)
@@ -2428,19 +2478,23 @@ class MainWindow(QMainWindow):
             self.prefix_combo.addItem(info["prefix"])
         self.prefix_combo.setFixedWidth(140)
         self.prefix_combo.setToolTip("Force a specific magazine prefix when auto-detect fails")
+        self.prefix_combo.setAccessibleName("Magazine prefix")
         layout.addWidget(self.prefix_combo)
 
         # ── Actions ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self.org_btn = QPushButton("▶  Organize PDFs")
+        self.org_btn = QPushButton("Organize PDFs")
         self.org_btn.setProperty("role", "primary")
+        self.org_btn.setAccessibleName("Organize PDFs")
         self.org_btn.clicked.connect(self._run_organize)
-        self.dl_missing_btn = QPushButton("⬇  Download Missing")
+        self.dl_missing_btn = QPushButton("Download Missing")
+        self.dl_missing_btn.setAccessibleName("Download missing issues")
         self.dl_missing_btn.setEnabled(False)
         self.dl_missing_btn.clicked.connect(self._start_missing_download)
-        self.dl_missing_stop_btn = QPushButton("■  Stop")
+        self.dl_missing_stop_btn = QPushButton("Stop")
         self.dl_missing_stop_btn.setProperty("role", "danger")
+        self.dl_missing_stop_btn.setAccessibleName("Stop missing-issue download")
         self.dl_missing_stop_btn.setEnabled(False)
         self.dl_missing_stop_btn.clicked.connect(self._stop_missing_download)
         btn_row.addWidget(self.org_btn, 2)
@@ -2488,17 +2542,21 @@ class MainWindow(QMainWindow):
             self.cookie_edit.setText(path)
 
     def _clear_progress(self):
-        if os.path.exists(PROGRESS_FILE):
-            os.remove(PROGRESS_FILE)
-            self._dl_log("Progress cache cleared.")
+        removed = []
+        for path in (PROGRESS_FILE, SPECIAL_ISSUES_FILE):
+            if os.path.exists(path):
+                os.remove(path)
+                removed.append(os.path.basename(path))
+        if removed:
+            self._log("Cache cleared: " + ", ".join(removed))
         else:
-            self._dl_log("No progress cache file found.")
+            self._log("No download cache files found.")
 
     @staticmethod
     def _colorize(line: str) -> str:
         """Return an HTML-colored version of a log line."""
         esc = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        if "FAILED" in line or "ERROR:" in line:
+        if MainWindow._is_error_line(line):
             color = "#f38ba8"
         elif "[corrupt]" in line:
             color = "#fab387"
@@ -2511,9 +2569,73 @@ class MainWindow(QMainWindow):
             color = "#a6adc8"
         return f'<span style="color:{color}">{esc}</span>'
 
-    def _log(self, msg: str) -> None:
-        self.log.append(self._colorize(msg))
+    @staticmethod
+    def _is_error_line(line: str) -> bool:
+        upper = line.upper()
+        return "FAILED" in upper or "ERROR:" in upper or upper.startswith("ERROR")
+
+    def _update_error_badge(self) -> None:
+        count = sum(1 for line in self._raw_log_lines if self._is_error_line(line))
+        self.error_badge.setText(f"{count} error" if count == 1 else f"{count} errors")
+
+    def _refresh_log(self) -> None:
+        query = self.log_filter.text().strip().lower()
+        lines = [
+            line for line in self._raw_log_lines
+            if not query or query in line.lower()
+        ]
+        self.log.setHtml("\n".join(self._colorize(line) for line in lines))
         self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def _copy_errors(self) -> None:
+        errors = [line for line in self._raw_log_lines if self._is_error_line(line)]
+        QApplication.clipboard().setText("\n".join(errors))
+
+    def _clear_log(self) -> None:
+        self._raw_log_lines.clear()
+        self._update_error_badge()
+        self._refresh_log()
+
+    def _reset_magazine_progress(self) -> None:
+        while self.magazine_progress_layout.count():
+            item = self.magazine_progress_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._magazine_progress_rows.clear()
+        self.magazine_progress_panel.setVisible(False)
+
+    def _update_magazine_progress(self, name: str, done: int, total: int) -> None:
+        row_data = self._magazine_progress_rows.get(name)
+        if row_data is None:
+            row = QWidget(self.magazine_progress_panel)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            label = QLabel(name)
+            label.setProperty("role", "muted")
+            bar = QProgressBar()
+            bar.setAccessibleName(f"{name} download progress")
+            count = QLabel("0 / 0")
+            count.setProperty("role", "status")
+            count.setMinimumWidth(48)
+            row_layout.addWidget(label)
+            row_layout.addWidget(bar, 1)
+            row_layout.addWidget(count)
+            self.magazine_progress_layout.addWidget(row)
+            row_data = (row, bar, count)
+            self._magazine_progress_rows[name] = row_data
+        row, bar, count = row_data
+        bar.setMaximum(max(1, total))
+        bar.setValue(max(0, min(done, total)))
+        count.setText(f"{done} / {total}")
+        row.setVisible(True)
+        self.magazine_progress_panel.setVisible(True)
+
+    def _log(self, msg: str) -> None:
+        self._raw_log_lines.append(msg)
+        self._update_error_badge()
+        self._refresh_log()
 
     def _start_download(self):
         if self.worker is not None and self.worker.isRunning():
@@ -2537,6 +2659,7 @@ class MainWindow(QMainWindow):
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self._reset_magazine_progress()
         self.progress_bar.setValue(0)
         self.progress_bar.setMaximum(1)
         self.progress_bar.setVisible(True)
@@ -2547,6 +2670,7 @@ class MainWindow(QMainWindow):
                                      include_specials=specials)
         self.worker.signals.log.connect(self._log)
         self.worker.signals.progress.connect(self._update_progress)
+        self.worker.signals.magazine_progress.connect(self._update_magazine_progress)
         self.worker.signals.status_msg.connect(self.status_label.setText)
         self.worker.signals.error.connect(self._on_error)
         self.worker.signals.finished.connect(self._on_finished)
@@ -2573,6 +2697,7 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
+        self.magazine_progress_panel.setVisible(False)
         outcome = getattr(self.worker, "outcome", OUTCOME_FAILED)
         label = {
             OUTCOME_SUCCESS: "Done",
@@ -2686,7 +2811,8 @@ class MainWindow(QMainWindow):
         pfx_text = self.prefix_combo.currentText()
         hint = None if pfx_text == "Auto-detect" else pfx_text
 
-        self.log.clear()
+        self._clear_log()
+        self._reset_magazine_progress()
         self._log(f"Organizing PDFs from: {src}")
         self._log(f"                  to: {dst}\n")
 

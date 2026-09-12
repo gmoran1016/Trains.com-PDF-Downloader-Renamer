@@ -15,6 +15,21 @@ def qapp():
     app.processEvents()
 
 
+@pytest.fixture
+def qt_app(qapp):
+    return qapp
+
+
+@pytest.fixture
+def window(qt_app):
+    win = MainWindow()
+    win.show()
+    qt_app.processEvents()
+    yield win
+    win.close()
+    qt_app.processEvents()
+
+
 def test_first_launch_guidance_distinguishes_browser_modes(qapp):
     window = MainWindow()
     try:
@@ -52,3 +67,62 @@ def test_magazine_selector_wraps_and_section_labels_have_contrast_support(qapp):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_action_controls_have_accessible_names_and_plain_text(window):
+    controls = (
+        window.start_btn,
+        window.stop_btn,
+        window._clear_btn,
+        window._dl_mode_btn,
+        window._org_mode_btn,
+        window.cookie_edit,
+        window.dir_edit,
+        window.headless_cb,
+        window.test_cb,
+        window.specials_cb,
+        window.sort_combo,
+    )
+    assert all(control.accessibleName() for control in controls)
+    assert not any(icon in window.start_btn.text() for icon in ("▶", "■", "⬇"))
+    assert not any(icon in window.stop_btn.text() for icon in ("▶", "■", "⬇"))
+
+
+def test_log_filter_copy_errors_and_badge(window, qt_app):
+    assert window.log_filter is not None
+    assert window.copy_errors_btn is not None
+    assert window.error_badge.text().startswith("0")
+
+    window._log("Downloaded: good.pdf")
+    window._log("FAILED: bad.pdf")
+    qt_app.processEvents()
+
+    assert window.error_badge.text().startswith("1")
+    window.copy_errors_btn.click()
+    assert "FAILED: bad.pdf" in QApplication.clipboard().text()
+
+    window.log_filter.setText("good")
+    qt_app.processEvents()
+    assert "good.pdf" in window.log.toPlainText()
+    assert "bad.pdf" not in window.log.toPlainText()
+
+
+def test_magazine_progress_update_creates_visible_row(window, qt_app):
+    window._update_magazine_progress("Model Railroader", 2, 5)
+    qt_app.processEvents()
+
+    row, bar, count = window._magazine_progress_rows["Model Railroader"]
+    assert row.isVisible()
+    assert bar.value() == 2
+    assert bar.maximum() == 5
+    assert count.text() == "2 / 5"
+
+
+def test_minimum_window_keeps_log_toolbar_and_log_visible(window, qt_app):
+    window.resize(640, 520)
+    qt_app.processEvents()
+
+    assert window.log_filter.isVisible()
+    assert window.copy_errors_btn.isVisible()
+    assert window.log.isVisible()
+    assert window.log.height() > 0
