@@ -383,6 +383,54 @@ def test_login_detection_does_not_accept_generic_account_link():
     assert downloader.is_logged_in() is False
 
 
+def test_browser_uses_non_persistent_webdriver_transport(monkeypatch, tmp_path):
+    import selenium.webdriver
+    from trains_app import MagazineDownloader
+
+    captured = {}
+
+    class FakeDriver:
+        def quit(self):
+            pass
+
+    def fake_chrome(**kwargs):
+        captured.update(kwargs)
+        return FakeDriver()
+
+    monkeypatch.setattr(selenium.webdriver, "Chrome", fake_chrome)
+    downloader = MagazineDownloader(str(tmp_path), headless=True)
+    downloader.close()
+
+    assert captured["keep_alive"] is False
+
+
+def test_browser_navigation_retries_connection_reset(monkeypatch):
+    from trains_app import MagazineDownloader
+
+    class FlakyDriver:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, _url):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(
+                    "ProtocolError: ('Connection aborted.', "
+                    "ConnectionResetError(10054))"
+                )
+
+    logs = []
+    downloader = object.__new__(MagazineDownloader)
+    downloader._driver = FlakyDriver()
+    downloader.log_fn = logs.append
+    monkeypatch.setattr("trains_app.time.sleep", lambda _seconds: None)
+
+    downloader._navigate("https://www.trains.com/", attempts=2)
+
+    assert downloader._driver.calls == 2
+    assert any("retrying" in message.lower() for message in logs)
+
+
 def test_cancel_pending_futures_only_cancels_not_started_work():
     from concurrent.futures import Future
     from trains_app import cancel_pending_futures

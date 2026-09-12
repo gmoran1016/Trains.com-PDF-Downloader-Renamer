@@ -471,7 +471,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.8.1"
+APP_VERSION = "1.8.2"
 ALL_MONTHS = list(month_name)[1:]
 # Full magazine names keyed by the file prefix used throughout this tool
 PREFIX_TO_TITLE: dict[str, str] = {
@@ -1066,14 +1066,54 @@ class MagazineDownloader:
             opts.add_argument("--window-size=1920,1080")
             opts.add_argument("--disable-gpu")
 
-        # Selenium 4.6+ selenium-manager auto-downloads the right chromedriver
-        self._driver = webdriver.Chrome(options=opts)
+        # Selenium 4.6+ selenium-manager auto-downloads the right chromedriver.
+        # A fresh transport per command avoids stale keep-alive sockets being
+        # reset while long trains.com pages are still loading.
+        self._driver = webdriver.Chrome(options=opts, keep_alive=False)
         self._log("Browser started.")
 
     def _log(self, msg: str):
         logger.info(msg)
         if self.log_fn:
             self.log_fn(msg)
+
+    @staticmethod
+    def _is_transient_navigation_error(exc: Exception) -> bool:
+        """Return whether a browser transport failure is safe to retry."""
+        if isinstance(exc, (ConnectionError, TimeoutError)):
+            return True
+        message = repr(exc).lower()
+        return any(marker in message for marker in (
+            "connection aborted",
+            "connection reset",
+            "connection refused",
+            "remote disconnected",
+            "chrome not reachable",
+            "not connected to devtools",
+            "invalid session id",
+            "target window already closed",
+            "10054",
+        ))
+
+    def _navigate(self, url: str, attempts: int = 3) -> None:
+        """Navigate with bounded retries for transient ChromeDriver resets."""
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                self._driver.get(url)
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt >= attempts or not self._is_transient_navigation_error(exc):
+                    raise
+                wait = 1.0 * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                self._log(
+                    "Browser navigation was interrupted; "
+                    f"retrying ({attempt}/{attempts - 1}) in {wait:.1f}s…"
+                )
+                time.sleep(wait)
+        if last_error:
+            raise last_error
 
     def close(self):
         try:
@@ -1087,7 +1127,7 @@ class MagazineDownloader:
     def add_cookies(self, cookies: list):
         """Add a list of cookies to the current browser session."""
         # Must be on the target domain first
-        self._driver.get("https://www.trains.com/")
+        self._navigate("https://www.trains.com/")
         time.sleep(1)
         added = 0
         for c in cookies:
@@ -1108,7 +1148,7 @@ class MagazineDownloader:
     # -- Login ---------------------------------------------------------------
     def is_logged_in(self, url: str = "https://www.trains.com/") -> bool:
         try:
-            self._driver.get(url)
+            self._navigate(url)
             time.sleep(2)
             src = self._driver.page_source.lower()
             return any(k in src for k in (
@@ -1124,7 +1164,7 @@ class MagazineDownloader:
         Open trains.com in the visible browser and poll until the user
         has successfully logged in (or timeout expires).
         """
-        self._driver.get("https://www.trains.com/")
+        self._navigate("https://www.trains.com/")
         self._log("Please log in via the browser window. Waiting…")
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -1178,7 +1218,7 @@ class MagazineDownloader:
                              hint_prefix: str | None = None) -> list[str]:
         from selenium.webdriver.support.ui import WebDriverWait
 
-        self._driver.get(url)
+        self._navigate(url)
 
         expected_scope = self._canonical_url(archive_url)
         current_url = self._canonical_url(self._driver.current_url)
@@ -1272,7 +1312,7 @@ class MagazineDownloader:
         from selenium.webdriver.common.by import By
 
         try:
-            self._driver.get(issue_url)
+            self._navigate(issue_url)
             time.sleep(2 + random.uniform(0, 0.5))
 
             # ---- Mode 1: direct <a> download link ---------------------------
@@ -1670,7 +1710,7 @@ class DownloadWorker(QThread):
 
                         self._log(f"[{done + 1}/{total}] {issue_url}")
                         try:
-                            downloader._driver.get(issue_url)
+                            downloader._navigate(issue_url)
                             time.sleep(2 + random.uniform(0, 0.5))
                             mode, pdf_url = detect_download_mode(downloader._driver)
                         except Exception as e:
