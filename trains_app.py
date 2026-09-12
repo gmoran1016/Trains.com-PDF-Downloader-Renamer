@@ -34,8 +34,10 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QFileDialog, QTextEdit,
     QProgressBar, QComboBox, QMessageBox, QMenu, QSystemTrayIcon,
+    QButtonGroup, QFrame, QScrollArea, QSizePolicy, QSplitter,
+    QStackedWidget, QToolButton,
 )
-from PyQt5.QtCore import pyqtSignal, QObject, QThread
+from PyQt5.QtCore import pyqtSignal, QObject, QThread, Qt
 
 # ------------------------------------------------------------------------------
 # Base directory — next to the .exe when frozen, next to the script otherwise
@@ -2222,6 +2224,123 @@ QToolTip {
 /* ── Message boxes ────────────────────────────────────────────────────── */
 QMessageBox { background: #1e1e2e; }
 QMessageBox QLabel { color: #cdd6f4; }
+
+/* ── Archive workstation redesign ───────────────────────────────────── */
+QMainWindow, QWidget {
+    background-color: #F4F1EA;
+    color: #182126;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 10pt;
+}
+QWidget#app_header { background: transparent; }
+QLabel#brand_mark {
+    background: #203B4A;
+    color: #FFFDF8;
+    border-radius: 10px;
+    font-size: 14pt;
+    font-weight: 800;
+    padding: 8px;
+}
+QLabel[role="app-title"] { color: #182126; font-size: 16pt; font-weight: 800; }
+QLabel[role="app-subtitle"] { color: #53636A; font-size: 9pt; }
+QLabel[role="page-title"] { color: #182126; font-size: 20pt; font-weight: 800; }
+QLabel[role="page-description"] { color: #53636A; font-size: 10pt; }
+QLabel[role="eyebrow"] {
+    color: #53636A;
+    font-size: 8pt;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+QLabel[role="muted"] { color: #53636A; font-size: 9pt; }
+QLabel[role="status"] { color: #203B4A; font-size: 9pt; font-weight: 600; }
+QLabel#header_status {
+    background: #E4EFE9;
+    border: 1px solid #A9C8B7;
+    border-radius: 14px;
+    color: #2F7D5A;
+    font-weight: 700;
+    padding: 6px 12px;
+}
+QLabel#header_status[state="failed"] { background: #F7E7E4; border-color: #D9A9A2; color: #B4483E; }
+QLabel#header_status[state="cancelled"], QLabel#header_status[state="empty"] { background: #FFF1D8; border-color: #E0BB7B; color: #A86716; }
+QFrame#nav_rail {
+    background: #203B4A;
+    border: none;
+    border-radius: 14px;
+}
+QLabel#nav_heading { color: #D9E2E5; font-size: 8pt; font-weight: 800; letter-spacing: 0.08em; }
+QToolButton#nav_button {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: #D9E2E5;
+    min-height: 42px;
+    padding: 0 14px;
+    text-align: left;
+}
+QToolButton#nav_button:hover { background: #2B5365; border-color: #6F8E9B; }
+QToolButton#nav_button:checked { background: #FFFDF8; color: #203B4A; font-weight: 800; }
+QFrame[role="card"] {
+    background: #FFFDF8;
+    border: 1px solid #C9C4B8;
+    border-radius: 12px;
+}
+QFrame[role="card"] > QLabel[role="card-title"] { color: #182126; font-size: 11pt; font-weight: 800; }
+QLineEdit, QComboBox {
+    background: #FFFDF8;
+    border: 1px solid #A9A59B;
+    border-radius: 7px;
+    color: #182126;
+    min-height: 32px;
+    padding: 5px 10px;
+    selection-background-color: #D7E4EA;
+    selection-color: #182126;
+}
+QLineEdit:focus, QComboBox:focus { background: #FFFFFF; border: 2px solid #C7792B; }
+QLineEdit:disabled, QComboBox:disabled { background: #ECE8DF; color: #7C878A; }
+QLineEdit::placeholder { color: #6A777A; }
+QComboBox QAbstractItemView { background: #FFFDF8; color: #182126; selection-background-color: #D7E4EA; }
+QPushButton, QToolButton {
+    background: #ECE8DF;
+    border: 1px solid #B9B4A9;
+    border-radius: 7px;
+    color: #203B4A;
+    min-height: 34px;
+    padding: 5px 14px;
+    font-weight: 600;
+}
+QPushButton:hover, QToolButton:hover { background: #E2DDD2; border-color: #C7792B; }
+QPushButton:pressed, QToolButton:pressed { background: #D6D0C4; }
+QPushButton:disabled, QToolButton:disabled { background: #E5E1D8; color: #879092; border-color: #D0CBC1; }
+QPushButton:focus, QToolButton:focus, QCheckBox:focus { border: 2px solid #C7792B; }
+QPushButton[role="primary"] { background: #C7792B; border-color: #A96220; color: #FFFDF8; font-weight: 800; min-height: 42px; }
+QPushButton[role="primary"]:hover { background: #A96220; }
+QPushButton[role="danger"] { background: #F7E7E4; border-color: #D9A9A2; color: #B4483E; }
+QCheckBox { color: #182126; spacing: 8px; min-height: 36px; }
+QCheckBox::indicator { width: 18px; height: 18px; border: 2px solid #7C878A; border-radius: 4px; background: #FFFDF8; }
+QCheckBox::indicator:hover { border-color: #C7792B; }
+QCheckBox::indicator:checked { background: #C7792B; border-color: #A96220; }
+QScrollArea { background: transparent; border: none; }
+QScrollArea > QWidget > QWidget { background: transparent; }
+QSplitter::handle { background: #C9C4B8; height: 5px; }
+QProgressBar { background: #E2DDD2; border: 1px solid #C9C4B8; border-radius: 5px; min-height: 9px; max-height: 9px; text-align: center; color: transparent; }
+QProgressBar::chunk { background: #C7792B; border-radius: 4px; }
+QTextEdit {
+    background: #182126;
+    border: 1px solid #53636A;
+    border-radius: 8px;
+    color: #F4F1EA;
+    selection-background-color: #34596B;
+    padding: 8px;
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 9pt;
+}
+QScrollBar:vertical { background: transparent; width: 9px; }
+QScrollBar::handle:vertical { background: #A9A59B; border-radius: 4px; min-height: 24px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QToolTip { background: #203B4A; border: 1px solid #6F8E9B; color: #FFFDF8; padding: 5px 9px; }
+QMessageBox { background: #FFFDF8; }
+QMessageBox QLabel { color: #182126; }
 """
 
 
@@ -2229,8 +2348,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"Trains.com Magazine Downloader & Organizer v{APP_VERSION}")
-        self.resize(860, 720)
-        self.setMinimumSize(640, 520)
+        self.resize(1040, 760)
+        self.setMinimumSize(800, 620)
         self.worker:           DownloadWorker | None      = None
         self._org_worker:      OrganizeWorker | None      = None
         self._missing_worker:  MissingIssuesWorker | None = None
@@ -2551,6 +2670,248 @@ class MainWindow(QMainWindow):
         self.prefix_combo.currentIndexChanged.connect(self._save_settings)
 
         return w
+
+    # -- Archive workstation shell ------------------------------------------
+    def _build_ui(self):
+        self.setStyleSheet(_STYLESHEET)
+        root = QWidget()
+        root.setObjectName("root")
+        self.setCentralWidget(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(24, 20, 24, 20)
+        outer.setSpacing(16)
+        outer.addWidget(self._make_header())
+
+        body = QHBoxLayout()
+        body.setSpacing(18)
+        body.addWidget(self._make_navigation(), 0)
+
+        workspace = QWidget()
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(12)
+        workspace_layout.addWidget(self._make_archive_access(), 0)
+
+        self._page_stack = QStackedWidget()
+        self._download_page = self._make_download_page()
+        self._organize_page = self._make_organize_page()
+        self._page_stack.addWidget(self._download_page)
+        self._page_stack.addWidget(self._organize_page)
+        workspace_layout.addWidget(self._page_stack, 1)
+        body_widget = QWidget()
+        body_widget.setLayout(body)
+        body.addWidget(workspace, 1)
+
+        self._activity_panel = self._make_activity_panel()
+        self._activity_splitter = QSplitter(Qt.Vertical)
+        self._activity_splitter.addWidget(body_widget)
+        self._activity_splitter.addWidget(self._activity_panel)
+        self._activity_splitter.setStretchFactor(0, 1)
+        self._activity_splitter.setStretchFactor(1, 0)
+        self._activity_splitter.setSizes([520, 190])
+        outer.addWidget(self._activity_splitter, 1)
+
+        self.cookie_edit.textChanged.connect(self._save_settings)
+        self.org_headless_cb.stateChanged.connect(self._save_settings)
+        self._set_mode("download")
+
+    def _make_header(self) -> QWidget:
+        header = QWidget()
+        header.setObjectName("app_header")
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        mark = QLabel("TA")
+        mark.setObjectName("brand_mark")
+        mark.setAlignment(Qt.AlignCenter)
+        mark.setFixedSize(44, 44)
+        layout.addWidget(mark)
+        title_column = QVBoxLayout()
+        title_column.setSpacing(1)
+        title = QLabel("Trains.com Archive")
+        title.setProperty("role", "app-title")
+        subtitle = QLabel("Magazine downloader and PDF organizer")
+        subtitle.setProperty("role", "app-subtitle")
+        title_column.addWidget(title)
+        title_column.addWidget(subtitle)
+        layout.addLayout(title_column)
+        layout.addStretch()
+        self._header_status = QLabel("Ready")
+        self._header_status.setObjectName("header_status")
+        self._header_status.setAccessibleName("Job status: Ready")
+        self._header_status.setProperty("state", "ready")
+        layout.addWidget(self._header_status)
+        version = QLabel(f"v{APP_VERSION}")
+        version.setProperty("role", "muted")
+        layout.addWidget(version)
+        return header
+
+    def _make_navigation(self) -> QWidget:
+        rail = QFrame()
+        rail.setObjectName("nav_rail")
+        rail.setFixedWidth(176)
+        layout = QVBoxLayout(rail)
+        layout.setContentsMargins(12, 16, 12, 14)
+        layout.setSpacing(8)
+        heading = QLabel("WORKSPACE")
+        heading.setObjectName("nav_heading")
+        layout.addWidget(heading)
+
+        self._nav_group = QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        self._download_nav_btn = QToolButton()
+        self._organize_nav_btn = QToolButton()
+        for button, text, name in (
+            (self._download_nav_btn, "Download", "Download workflow"),
+            (self._organize_nav_btn, "Organize", "Organize workflow"),
+        ):
+            button.setObjectName("nav_button")
+            button.setText(text)
+            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setCheckable(True)
+            button.setAccessibleName(name)
+            self._nav_group.addButton(button)
+            layout.addWidget(button)
+        self._download_nav_btn.clicked.connect(lambda: self._set_mode("download"))
+        self._organize_nav_btn.clicked.connect(lambda: self._set_mode("organize"))
+        # Compatibility aliases for integrations and older UI smoke checks.
+        self._dl_mode_btn = self._download_nav_btn
+        self._org_mode_btn = self._organize_nav_btn
+        layout.addStretch()
+        self._activity_nav_btn = QToolButton()
+        self._activity_nav_btn.setObjectName("nav_button")
+        self._activity_nav_btn.setText("Activity")
+        self._activity_nav_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._activity_nav_btn.setCheckable(True)
+        self._activity_nav_btn.setAccessibleName("Toggle activity panel")
+        self._activity_nav_btn.clicked.connect(self._toggle_activity)
+        layout.addWidget(self._activity_nav_btn)
+        return rail
+
+    def _make_archive_access(self) -> QWidget:
+        card = QFrame()
+        card.setProperty("role", "card")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+        title = QLabel("Archive access")
+        title.setProperty("role", "card-title")
+        layout.addWidget(title)
+        note = QLabel(
+            "An active trains.com subscription is required. Use a saved cookie file and leave the browser visible the first time you sign in."
+        )
+        note.setProperty("role", "muted")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        label = QLabel("Cookie file")
+        label.setProperty("role", "eyebrow")
+        self.cookie_edit = QLineEdit(DEFAULT_COOKIES_FILE)
+        self.cookie_edit.setAccessibleName("Cookie file path")
+        label.setBuddy(self.cookie_edit)
+        browse = QPushButton("Browse…")
+        browse.setAccessibleName("Browse for cookie file")
+        browse.clicked.connect(self._browse_cookies)
+        row.addWidget(label)
+        row.addWidget(self.cookie_edit, 1)
+        row.addWidget(browse)
+        layout.addLayout(row)
+        self.org_headless_cb = QCheckBox("Hide browser for missing-issue downloads")
+        self.org_headless_cb.setAccessibleName("Hide browser for missing-issue downloads")
+        layout.addWidget(self.org_headless_cb)
+        return card
+
+    @staticmethod
+    def _wrap_page(content: QWidget, object_name: str) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setObjectName(object_name)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        return scroll
+
+    def _make_download_page(self) -> QScrollArea:
+        return self._wrap_page(self._make_download_panel(), "download_scroll")
+
+    def _make_organize_page(self) -> QScrollArea:
+        return self._wrap_page(self._make_organize_panel(), "organize_scroll")
+
+    def _make_activity_panel(self) -> QWidget:
+        panel = QFrame()
+        panel.setProperty("role", "card")
+        panel.setMinimumHeight(160)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(7)
+        toolbar = QHBoxLayout()
+        heading = QLabel("Activity")
+        heading.setProperty("role", "card-title")
+        toolbar.addWidget(heading)
+        self.status_label = QLabel("Ready")
+        self.status_label.setProperty("role", "status")
+        toolbar.addWidget(self.status_label)
+        toolbar.addStretch()
+        self.log_filter = QLineEdit()
+        self.log_filter.setPlaceholderText("Filter activity…")
+        self.log_filter.setAccessibleName("Activity filter")
+        self.log_filter.textChanged.connect(self._refresh_log)
+        self.error_badge = QLabel("0 errors")
+        self.error_badge.setProperty("role", "status")
+        self.error_badge.setAccessibleName("Activity error count")
+        self.copy_errors_btn = QPushButton("Copy errors")
+        self.copy_errors_btn.setAccessibleName("Copy activity errors")
+        self.copy_errors_btn.clicked.connect(self._copy_errors)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setAccessibleName("Clear activity log")
+        clear_btn.clicked.connect(self._clear_log)
+        toolbar.addWidget(self.log_filter, 1)
+        toolbar.addWidget(self.error_badge)
+        toolbar.addWidget(self.copy_errors_btn)
+        toolbar.addWidget(clear_btn)
+        layout.addLayout(toolbar)
+
+        progress_row = QHBoxLayout()
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.status_label.setMinimumWidth(170)
+        progress_row.addWidget(self.progress_bar, 1)
+        self.magazine_progress_panel = QWidget()
+        self.magazine_progress_layout = QVBoxLayout(self.magazine_progress_panel)
+        self.magazine_progress_layout.setContentsMargins(0, 0, 0, 0)
+        self.magazine_progress_layout.setSpacing(3)
+        self.magazine_progress_panel.setVisible(False)
+        progress_row.addWidget(self.magazine_progress_panel, 1)
+        layout.addLayout(progress_row)
+
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setAccessibleName("Activity log")
+        self.log.setMinimumHeight(72)
+        layout.addWidget(self.log, 1)
+        return panel
+
+    def _set_mode(self, mode: str):
+        index = 0 if mode == "download" else 1
+        self._page_stack.setCurrentIndex(index)
+        self._download_nav_btn.setChecked(index == 0)
+        self._organize_nav_btn.setChecked(index == 1)
+        self._active_mode = mode
+        scroll = self._page_stack.currentWidget()
+        if isinstance(scroll, QScrollArea):
+            scroll.verticalScrollBar().setValue(0)
+
+    def _switch_mode(self, mode: str):
+        self._set_mode(mode)
+
+    def _toggle_activity(self):
+        expanded = not getattr(self, "_activity_expanded", False)
+        self._activity_expanded = expanded
+        self._activity_nav_btn.setChecked(expanded)
+        total = max(self.height() - 170, 420)
+        self._activity_splitter.setSizes(
+            [max(260, total - (330 if expanded else 190)), 330 if expanded else 190]
+        )
 
     # -- Helpers --------------------------------------------------------------
     @staticmethod

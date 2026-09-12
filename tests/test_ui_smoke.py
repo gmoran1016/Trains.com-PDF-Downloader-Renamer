@@ -8,6 +8,40 @@ from PyQt5.QtWidgets import QApplication, QLabel
 from trains_app import MainWindow, _STYLESHEET
 
 
+def test_redesigned_shell_has_scrollable_pages_and_navigation(qapp):
+    window = MainWindow()
+    try:
+        assert window.minimumWidth() >= 800
+        assert window.minimumHeight() >= 620
+        assert window._page_stack.count() == 2
+        assert window._download_page is window._page_stack.widget(0)
+        assert window._organize_page is window._page_stack.widget(1)
+        assert window._download_nav_btn.isCheckable()
+        assert window._organize_nav_btn.isCheckable()
+        assert window._activity_nav_btn.isCheckable()
+        assert window._download_nav_btn.isChecked()
+        assert window._header_status.text()
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_navigation_switches_workflow_pages(qapp):
+    window = MainWindow()
+    try:
+        assert window._page_stack.currentWidget() is window._download_page
+        window._organize_nav_btn.click()
+        qapp.processEvents()
+        assert window._page_stack.currentWidget() is window._organize_page
+        assert window._organize_nav_btn.isChecked()
+        window._download_nav_btn.click()
+        qapp.processEvents()
+        assert window._page_stack.currentWidget() is window._download_page
+    finally:
+        window.close()
+        window.deleteLater()
+
+
 @pytest.fixture(scope="session")
 def qapp():
     app = QApplication.instance() or QApplication([])
