@@ -268,3 +268,70 @@ def test_handle_result_does_not_duplicate_failed_entry(tmp_path):
         assert len(progress["failed"]) == 1
     finally:
         trains_app.PROGRESS_FILE = original
+
+
+def test_completed_progress_is_scoped_to_destination():
+    from trains_app import _is_progress_completed, progress_key
+
+    url = "https://www.trains.com/mrr/magazine/october-2026/"
+    progress = {
+        "completed_scoped": [progress_key(url, "C:/one/MRR", False)]
+    }
+    assert _is_progress_completed(progress, url, "C:/one/MRR", False)
+    assert not _is_progress_completed(progress, url, "C:/two/MRR", False)
+    assert progress_key(url, "C:/one/MRR", False) != progress_key(
+        url, "C:/two/MRR", False
+    )
+    assert progress_key(url, "C:/one/MRR", False) != progress_key(
+        url, "C:/one/MRR/Special Issues", True
+    )
+
+
+def test_handle_result_records_scoped_completion(tmp_path):
+    from trains_app import _handle_result, progress_key
+    import trains_app
+
+    original = trains_app.PROGRESS_FILE
+    trains_app.PROGRESS_FILE = str(tmp_path / "progress.json")
+    try:
+        url = "https://www.trains.com/mrr/magazine/october-2026/"
+        progress = {"completed": [], "completed_scoped": [], "failed": []}
+        _handle_result(
+            True,
+            "saved.pdf",
+            url,
+            progress,
+            set(),
+            lambda _line: None,
+            progress_key_value=progress_key(url, str(tmp_path), False),
+        )
+        assert url in progress["completed"]
+        assert progress["completed_scoped"]
+    finally:
+        trains_app.PROGRESS_FILE = original
+
+
+def test_progress_loader_initializes_scoped_entries(tmp_path):
+    import trains_app
+
+    original = trains_app.PROGRESS_FILE
+    trains_app.PROGRESS_FILE = str(tmp_path / "missing-progress.json")
+    try:
+        assert trains_app.load_progress()["completed_scoped"] == []
+    finally:
+        trains_app.PROGRESS_FILE = original
+
+
+def test_login_detection_accepts_current_account_surface():
+    from trains_app import MagazineDownloader
+
+    class LoggedInDriver:
+        page_source = "<header>Hello, Griffin</header><a>Your Account</a>"
+
+        def get(self, _url):
+            return None
+
+    downloader = object.__new__(MagazineDownloader)
+    downloader._driver = LoggedInDriver()
+
+    assert downloader.is_logged_in() is True

@@ -106,6 +106,15 @@ class ArchiveScanError(RuntimeError):
 class ArchiveRedirectError(ArchiveScanError):
     """Raised when an archive request lands on an unrelated URL."""
 
+
+def _canonical_url(url: str) -> str:
+    """Normalize a Trains.com URL without retaining filters or fragments."""
+    parts = urlsplit((url or "").strip())
+    path = re.sub(r"/{2,}", "/", parts.path or "/")
+    if path != "/":
+        path = path.rstrip("/") + "/"
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
+
 # ------------------------------------------------------------------------------
 # Cookie utilities
 # ------------------------------------------------------------------------------
@@ -144,17 +153,51 @@ def load_cookies(path: str) -> list:
 # ------------------------------------------------------------------------------
 
 def load_progress() -> dict:
+    empty = {"completed": [], "completed_scoped": [], "failed": []}
     if os.path.exists(PROGRESS_FILE):
         try:
             with open(PROGRESS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # ensure required keys
-            data.setdefault("completed", [])
-            data.setdefault("failed", [])
+            if not isinstance(data, dict):
+                return empty
+            # Ensure required keys and tolerate legacy progress files.
+            for key in empty:
+                if not isinstance(data.get(key), list):
+                    data[key] = []
             return data
         except Exception:
             pass
-    return {"completed": [], "failed": []}
+    return empty
+
+
+def progress_key(issue_url: str, destination_dir: str, flat: bool) -> str:
+    """Return a stable completion key scoped to the output location."""
+    destination = os.path.normcase(os.path.abspath(os.path.normpath(destination_dir)))
+    return json.dumps(
+        {
+            "destination": destination,
+            "flat": bool(flat),
+            "url": _canonical_url(issue_url),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _is_progress_completed(progress: dict, issue_url: str,
+                           destination_dir: str, flat: bool) -> bool:
+    key = progress_key(issue_url, destination_dir, flat)
+    return key in set(progress.get("completed_scoped", []))
+
+
+def _record_progress_completion(progress: dict, issue_url: str,
+                                scoped_key: str | None = None) -> None:
+    progress.setdefault("completed", [])
+    progress.setdefault("completed_scoped", [])
+    if issue_url not in progress["completed"]:
+        progress["completed"].append(issue_url)
+    if scoped_key and scoped_key not in progress["completed_scoped"]:
+        progress["completed_scoped"].append(scoped_key)
 
 
 def save_progress(progress: dict) -> None:
@@ -347,16 +390,20 @@ def _has_flipbook_trigger(driver) -> bool:
 
 
 def _handle_result(ok: bool, result: str, issue_url: str,
-                   progress: dict, completed_set: set, log_fn) -> None:
+                   progress: dict, completed_set: set, log_fn,
+                   progress_key_value: str | None = None) -> None:
     """Update progress tracking after a download attempt."""
+    progress.setdefault("completed", [])
+    progress.setdefault("completed_scoped", [])
+    progress.setdefault("failed", [])
     if ok:
         completed_set.add(issue_url)
-        progress["completed"].append(issue_url)
+        _record_progress_completion(progress, issue_url, progress_key_value)
         save_progress(progress)
     elif "read-only" in result or "No PDF download available" in result:
         log_fn(f"  [no pdf] {result}")
         completed_set.add(issue_url)
-        progress["completed"].append(issue_url)
+        _record_progress_completion(progress, issue_url, progress_key_value)
         save_progress(progress)
     else:
         log_fn(f"  FAILED: {result}")
@@ -994,7 +1041,10 @@ class MagazineDownloader:
             self._driver.get(url)
             time.sleep(2)
             src = self._driver.page_source.lower()
-            return any(k in src for k in ("log out", "logout", "sign out", "my account"))
+            return any(k in src for k in (
+                "log out", "logout", "sign out", "my account",
+                "your account", "hello,", "my benefits",
+            ))
         except Exception as e:
             logger.error(f"Login check error: {e}")
             return False
@@ -1009,7 +1059,10 @@ class MagazineDownloader:
         deadline = time.time() + timeout
         while time.time() < deadline:
             src = self._driver.page_source.lower()
-            if any(k in src for k in ("log out", "logout", "sign out", "my account")):
+            if any(k in src for k in (
+                "log out", "logout", "sign out", "my account",
+                "your account", "hello,", "my benefits",
+            )):
                 self._log("Login detected.")
                 return True
             remaining = int(deadline - time.time())
@@ -1022,11 +1075,7 @@ class MagazineDownloader:
     @staticmethod
     def _canonical_url(url: str) -> str:
         """Normalize an archive URL without retaining filters or fragments."""
-        parts = urlsplit((url or "").strip())
-        path = re.sub(r"/{2,}", "/", parts.path or "/")
-        if path != "/":
-            path = path.rstrip("/") + "/"
-        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
+        return _canonical_url(url)
 
     def _is_issue_link(self, href: str, archive_url: str,
                        hint_prefix: str | None = None) -> bool:
@@ -1454,7 +1503,7 @@ class DownloadWorker(QThread):
 
             # -- Collect all issue links ------------------------------------
             progress = load_progress()
-            completed_set = set(progress["completed"])  # O(1) membership checks
+            completed_set = set(progress["completed"])  # legacy compatibility for result handling
             # each task: (url, dest_dir, prefix, flat, mag_name)
             all_tasks: list[tuple[str, str, str, bool, str]] = []
 
@@ -1513,7 +1562,8 @@ class DownloadWorker(QThread):
                         self._log("Stopped by user.")
                         break
 
-                    if issue_url in completed_set:
+                    scoped_key_value = progress_key(issue_url, dest_dir, flat)
+                    if _is_progress_completed(progress, issue_url, dest_dir, flat):
                         self._log(f"[skip] {issue_url}")
                         done += 1
                         self._emit_progress(done, total, mag_name, mag_done, mag_total)
@@ -1522,7 +1572,7 @@ class DownloadWorker(QThread):
                     if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
                         self._log(f"[exists] {issue_url}")
                         completed_set.add(issue_url)
-                        progress["completed"].append(issue_url)
+                        _record_progress_completion(progress, issue_url, scoped_key_value)
                         save_progress(progress)
                         done += 1
                         self._emit_progress(done, total, mag_name, mag_done, mag_total)
@@ -1536,7 +1586,8 @@ class DownloadWorker(QThread):
                     except Exception as e:
                         self._log(f"  Error loading page: {e}")
                         _handle_result(False, str(e), issue_url,
-                                       progress, completed_set, self._log)
+                                       progress, completed_set, self._log,
+                                       progress_key_value=scoped_key_value)
                         done += 1
                         self._emit_progress(done, total, mag_name, mag_done, mag_total)
                         continue
@@ -1550,7 +1601,7 @@ class DownloadWorker(QThread):
                             fetch_pdf, pdf_url, dest_dir, prefix,
                             cookies, flat, downloader.download_dir, self._log
                         )
-                        pending[fut] = (issue_url, mag_name)
+                        pending[fut] = (issue_url, mag_name, scoped_key_value)
                         # Don't increment done yet — wait for future to complete
                     elif mode == "mode2":
                         try:
@@ -1560,14 +1611,16 @@ class DownloadWorker(QThread):
                         except Exception as e:
                             ok, result = False, str(e)
                         _handle_result(ok, result, issue_url,
-                                       progress, completed_set, self._log)
+                                       progress, completed_set, self._log,
+                                       progress_key_value=scoped_key_value)
                         done += 1
                         self._emit_progress(done, total, mag_name, mag_done, mag_total)
                         time.sleep(1 + random.uniform(0, 0.5))
                     else:  # mode3
                         _handle_result(
                             False, "No PDF download available (read-only issue)",
-                            issue_url, progress, completed_set, self._log
+                            issue_url, progress, completed_set, self._log,
+                            progress_key_value=scoped_key_value,
                         )
                         done += 1
                         self._emit_progress(done, total, mag_name, mag_done, mag_total)
@@ -1576,13 +1629,14 @@ class DownloadWorker(QThread):
                 for fut in as_completed(pending):
                     if self._stop:
                         break
-                    issue_url, mag_name = pending[fut]
+                    issue_url, mag_name, scoped_key_value = pending[fut]
                     try:
                         ok, result = fut.result()
                     except Exception as e:
                         ok, result = False, str(e)
                     _handle_result(ok, result, issue_url,
-                                   progress, completed_set, self._log)
+                                   progress, completed_set, self._log,
+                                   progress_key_value=scoped_key_value)
                     done += 1
                     self._emit_progress(done, total, mag_name, mag_done, mag_total)
 
@@ -1716,7 +1770,7 @@ class MissingIssuesWorker(QThread):
             matched: list[tuple[str, str, str]] = []  # (url, year, month)
             special: list[str] = []                   # urls with no parseable date
             progress = load_progress()
-            completed_set = set(progress["completed"])  # O(1) membership checks
+            completed_set = set(progress["completed"])  # legacy compatibility for result handling
             # Special issues use a separate file so they survive a progress-cache clear
             downloaded_specials = load_special_issues()
             special_dir = os.path.join(self.dest_dir, "Special Issues")
@@ -1729,10 +1783,16 @@ class MissingIssuesWorker(QThread):
                         matched.append((url, year, month))
                 else:
                     # Special issue — skip if already downloaded in a prior run
-                    if url not in downloaded_specials and not issue_already_on_disk(
-                        url, special_dir, self.prefix, flat=True
-                    ):
-                        special.append(url)
+                    special_key_value = progress_key(url, special_dir, True)
+                    if special_key_value in downloaded_specials:
+                        continue
+                    if issue_already_on_disk(url, special_dir, self.prefix, flat=True):
+                        _record_progress_completion(progress, url, special_key_value)
+                        downloaded_specials.add(special_key_value)
+                        save_special_issues(downloaded_specials)
+                        save_progress(progress)
+                        continue
+                    special.append(url)
 
             if not matched and not special:
                 self._log("Could not match any missing issues to archive URLs.")
@@ -1754,7 +1814,8 @@ class MissingIssuesWorker(QThread):
                     self._log("Stopped by user.")
                     break
 
-                if url in completed_set:
+                scoped_key_value = progress_key(url, self.dest_dir, False)
+                if _is_progress_completed(progress, url, self.dest_dir, False):
                     self._log(f"[skip] {url}")
                     dl_count += 1
                     self.signals.progress.emit(dl_count, total)
@@ -1763,7 +1824,7 @@ class MissingIssuesWorker(QThread):
                 if issue_already_on_disk(url, self.dest_dir, self.prefix, flat=False):
                     self._log(f"[exists] {month} {year}")
                     completed_set.add(url)
-                    progress["completed"].append(url)
+                    _record_progress_completion(progress, url, scoped_key_value)
                     save_progress(progress)
                     dl_count += 1
                     self.signals.progress.emit(dl_count, total)
@@ -1774,18 +1835,12 @@ class MissingIssuesWorker(QThread):
 
                 ok, result = downloader.download_issue(url, dest_dir=self.dest_dir,
                                                        hint_prefix=self.prefix)
+                _handle_result(
+                    ok, result, url, progress, completed_set, self._log,
+                    progress_key_value=scoped_key_value,
+                )
                 if ok:
-                    completed_set.add(url)
-                    progress["completed"].append(url)
-                    save_progress(progress)
                     self._log(f"  Downloaded: {result}")
-                elif "read-only" in result or "No PDF download available" in result:
-                    self._log(f"  [no pdf] {result}")
-                    completed_set.add(url)
-                    progress["completed"].append(url)
-                    save_progress(progress)
-                else:
-                    self._log(f"  FAILED: {result}")
 
                 dl_count += 1
                 self.signals.progress.emit(dl_count, total)
@@ -1799,19 +1854,21 @@ class MissingIssuesWorker(QThread):
 
                 slug = url.rstrip("/").split("/")[-1]
                 self._log(f"[special] {slug}  —  {url}")
+                scoped_key_value = progress_key(url, special_dir, True)
 
                 ok, result = downloader.download_issue(url, dest_dir=special_dir,
                                                        hint_prefix=self.prefix, flat=True)
+                _handle_result(
+                    ok, result, url, progress, completed_set, self._log,
+                    progress_key_value=scoped_key_value,
+                )
                 if ok:
-                    downloaded_specials.add(url)
+                    downloaded_specials.add(scoped_key_value)
                     save_special_issues(downloaded_specials)
                     self._log(f"  Downloaded: {result}")
                 elif "read-only" in result or "No PDF download available" in result:
-                    self._log(f"  [no pdf] {result}")
-                    downloaded_specials.add(url)
+                    downloaded_specials.add(scoped_key_value)
                     save_special_issues(downloaded_specials)
-                else:
-                    self._log(f"  FAILED: {result}")
 
                 dl_count += 1
                 self.signals.progress.emit(dl_count, total)
