@@ -20,6 +20,7 @@ from pathlib import Path
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit, urlunsplit
 
 try:
     import pypdf
@@ -96,6 +97,14 @@ SPECIAL_ISSUES_FILE = os.path.join(_BASE_DIR, "special_issues.json")
 SETTINGS_FILE       = os.path.join(_BASE_DIR, "settings.json")
 DOWNLOAD_TIMEOUT = 120   # seconds to wait for a PDF download
 LOGIN_TIMEOUT = 300      # seconds to wait for manual login (5 min)
+
+
+class ArchiveScanError(RuntimeError):
+    """Raised when an archive page cannot be trusted as a usable archive."""
+
+
+class ArchiveRedirectError(ArchiveScanError):
+    """Raised when an archive request lands on an unrelated URL."""
 
 # ------------------------------------------------------------------------------
 # Cookie utilities
@@ -885,6 +894,8 @@ def retry(attempts=3, delay=2.0, exceptions=(Exception,)):
                 try:
                     return fn(*args, **kwargs)
                 except exceptions as e:
+                    if isinstance(e, ArchiveScanError):
+                        raise
                     if i == attempts - 1:
                         raise
                     wait = delay * (2 ** i) + random.uniform(0, 0.5)
@@ -1000,17 +1011,27 @@ class MagazineDownloader:
         return False
 
     # -- Issue link collection ------------------------------------------------
-    def _is_issue_link(self, href: str, archive_url: str) -> bool:
+    @staticmethod
+    def _canonical_url(url: str) -> str:
+        """Normalize an archive URL without retaining filters or fragments."""
+        parts = urlsplit((url or "").strip())
+        path = re.sub(r"/{2,}", "/", parts.path or "/")
+        if path != "/":
+            path = path.rstrip("/") + "/"
+        return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
+
+    def _is_issue_link(self, href: str, archive_url: str,
+                       hint_prefix: str | None = None) -> bool:
         """
         Return True if href looks like an individual issue page under archive_url.
         Rejects year-filter URLs (?archive_year=…), pagination (/page/N/),
         and known non-issue slugs (current-issue, special-issues, etc.).
         """
-        if not href or not href.startswith(archive_url):
+        if not href:
             return False
-        if "?" in href:          # year filter / query params
-            return False
-        if "#" in href:          # anchor/fragment links (e.g. #content, #top)
+        href = MagazineDownloader._canonical_url(href)
+        archive_url = MagazineDownloader._canonical_url(archive_url)
+        if not href.startswith(archive_url):
             return False
         suffix = href[len(archive_url):].strip("/")
         if not suffix:           # bare archive URL itself
@@ -1018,33 +1039,69 @@ class MagazineDownloader:
         first_slug = suffix.split("/")[0]
         if first_slug in _NON_ISSUE_SLUGS:
             return False
+        # Normal archives contain dated issue slugs.  Keep special-issue slugs
+        # permissive because their titles are not necessarily date-shaped.
+        if "/special-issues/" not in archive_url:
+            if not parse_pdf_filename(first_slug + ".pdf", hint_prefix=hint_prefix):
+                return False
         return True
 
     @retry(attempts=3, exceptions=(Exception,))
-    def get_page_issue_links(self, url: str, archive_url: str) -> list:
-        from selenium.webdriver.common.by import By
+    def get_page_issue_links(self, url: str, archive_url: str,
+                             hint_prefix: str | None = None) -> list[str]:
+        from selenium.webdriver.support.ui import WebDriverWait
+
         self._driver.get(url)
-        time.sleep(2)
-        anchors = self._driver.find_elements(By.TAG_NAME, "a")
-        links = []
-        for a in anchors:
-            try:
-                href = a.get_attribute("href") or ""
-                if self._is_issue_link(href, archive_url) and href not in links:
-                    links.append(href)
-            except Exception:
-                continue
+
+        expected_scope = self._canonical_url(archive_url)
+        current_url = self._canonical_url(self._driver.current_url)
+        if not current_url.startswith(expected_scope):
+            raise ArchiveRedirectError(
+                f"Archive redirected outside the requested route: {url} → "
+                f"{self._driver.current_url}"
+            )
+
+        try:
+            WebDriverWait(self._driver, 15).until(
+                lambda driver: driver.execute_script(
+                    "return document.readyState"
+                ) in ("interactive", "complete")
+            )
+        except Exception as exc:
+            raise ArchiveScanError(f"Archive page did not finish loading: {url}") from exc
+
+        raw_hrefs = self._driver.execute_script(
+            "return Array.from(document.querySelectorAll('a[href]')).map(a => a.href);"
+        ) or []
+        links: list[str] = []
+        for raw_href in raw_hrefs:
+            href = self._canonical_url(raw_href)
+            if self._is_issue_link(href, archive_url, hint_prefix=hint_prefix) \
+                    and href not in links:
+                links.append(href)
         return links
 
-    def collect_all_issue_links(self, archive_url: str, max_pages: int = 110) -> list:
+    def collect_all_issue_links(self, archive_url: str, max_pages: int = 110,
+                                hint_prefix: str | None = None,
+                                allow_empty: bool = False) -> list[str]:
         """
         New trains.com pagination: page 1 = archive_url, page N = archive_url + 'page/N/'
         """
         all_links: list = []
+        is_special_archive = "/special-issues/" in self._canonical_url(archive_url)
         for page_num in range(1, max_pages + 1):
             url = archive_url if page_num == 1 else f"{archive_url}page/{page_num}/"
             try:
-                page_links = self.get_page_issue_links(url, archive_url)
+                page_links = self.get_page_issue_links(
+                    url, archive_url, hint_prefix=hint_prefix
+                )
+            except ArchiveRedirectError as exc:
+                if allow_empty and is_special_archive:
+                    self._log(f"  Special-issue route unavailable: {exc}")
+                    return []
+                raise
+            except ArchiveScanError:
+                raise
             except Exception as e:
                 self._log(f"  Error on page {page_num}: {e}")
                 break
@@ -1052,7 +1109,12 @@ class MagazineDownloader:
             new = [l for l in page_links if l not in all_links]
             if not new:
                 if page_num == 1:
-                    self._log("  No issues found on page 1 -- done.")
+                    if allow_empty and is_special_archive:
+                        self._log("  No special issues found -- done.")
+                    else:
+                        raise ArchiveScanError(
+                            f"Archive returned no issue links on page 1: {archive_url}"
+                        )
                 else:
                     self._log(f"  No more issues after page {page_num - 1} -- done.")
                 break
@@ -1384,7 +1446,9 @@ class DownloadWorker(QThread):
 
                 self._log(f"\n-- {mag_name} --")
                 max_pages = 3 if self.test_mode else 110
-                links = downloader.collect_all_issue_links(archive_url, max_pages=max_pages)
+                links = downloader.collect_all_issue_links(
+                    archive_url, max_pages=max_pages, hint_prefix=prefix
+                )
                 if not self.newest_first:   # list is already newest-first from the archive
                     links = list(reversed(links))
                 all_tasks.extend([(link, dest_dir, prefix, False, mag_name) for link in links])
@@ -1393,7 +1457,12 @@ class DownloadWorker(QThread):
                     specials_url = archive_url + "special-issues/"
                     special_dir  = os.path.join(dest_dir, "Special Issues")
                     self._log(f"  Checking special issues at {specials_url}…")
-                    special_links = downloader.collect_all_issue_links(specials_url, max_pages=max_pages)
+                    special_links = downloader.collect_all_issue_links(
+                        specials_url,
+                        max_pages=max_pages,
+                        hint_prefix=prefix,
+                        allow_empty=True,
+                    )
                     if not self.newest_first:
                         special_links = list(reversed(special_links))
                     if special_links:
@@ -1614,7 +1683,9 @@ class MissingIssuesWorker(QThread):
 
             # Collect all issue URLs from the archive
             self._log(f"Scanning archive: {self.archive_url}")
-            links = downloader.collect_all_issue_links(self.archive_url, max_pages=110)
+            links = downloader.collect_all_issue_links(
+                self.archive_url, max_pages=110, hint_prefix=self.prefix
+            )
             self._log(f"Found {len(links)} issues in archive. Matching against missing list…")
 
             # Match each URL to a (year, month) by parsing its slug
