@@ -335,3 +335,71 @@ def test_login_detection_accepts_current_account_surface():
     downloader._driver = LoggedInDriver()
 
     assert downloader.is_logged_in() is True
+
+
+def test_cancel_pending_futures_only_cancels_not_started_work():
+    from concurrent.futures import Future
+    from trains_app import cancel_pending_futures
+
+    pending = Future()
+    running = Future()
+    assert running.set_running_or_notify_cancel() is True
+
+    assert cancel_pending_futures({pending: "pending", running: "running"}) == 1
+    assert pending.cancelled()
+    assert not running.cancelled()
+
+
+def test_download_worker_classifies_empty_archive_as_no_results(monkeypatch, tmp_path):
+    import trains_app
+
+    class EmptyDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self._driver = None
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", EmptyDownloader)
+    worker = trains_app.DownloadWorker(
+        ["Model Railroader"], str(tmp_path), False, True, None, True,
+        include_specials=False,
+    )
+
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_NO_RESULTS
+
+
+def test_download_worker_stop_is_cancelled_not_success(monkeypatch, tmp_path):
+    import trains_app
+
+    class EmptyDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self._driver = None
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            return []
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", EmptyDownloader)
+    worker = trains_app.DownloadWorker(
+        ["Model Railroader"], str(tmp_path), False, True, None, True,
+        include_specials=False,
+    )
+    worker.stop()
+
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_CANCELLED

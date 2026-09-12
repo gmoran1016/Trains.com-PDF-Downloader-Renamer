@@ -98,6 +98,13 @@ SETTINGS_FILE       = os.path.join(_BASE_DIR, "settings.json")
 DOWNLOAD_TIMEOUT = 120   # seconds to wait for a PDF download
 LOGIN_TIMEOUT = 300      # seconds to wait for manual login (5 min)
 
+OUTCOME_IDLE = "idle"
+OUTCOME_RUNNING = "running"
+OUTCOME_SUCCESS = "success"
+OUTCOME_FAILED = "failed"
+OUTCOME_CANCELLED = "cancelled"
+OUTCOME_NO_RESULTS = "no-results"
+
 
 class ArchiveScanError(RuntimeError):
     """Raised when an archive page cannot be trusted as a usable archive."""
@@ -114,6 +121,18 @@ def _canonical_url(url: str) -> str:
     if path != "/":
         path = path.rstrip("/") + "/"
     return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
+
+
+def cancel_pending_futures(pending: dict) -> int:
+    """Cancel futures that have not started and return the number cancelled."""
+    cancelled = 0
+    for future in list(pending):
+        try:
+            if future.cancel():
+                cancelled += 1
+        except Exception:
+            logger.debug("Unable to cancel pending future", exc_info=True)
+    return cancelled
 
 # ------------------------------------------------------------------------------
 # Cookie utilities
@@ -1433,9 +1452,13 @@ class DownloadWorker(QThread):
         self.signals         = WorkerSignals()
         self._stop           = False
         self._start_time: float = 0.0
+        self.outcome         = OUTCOME_IDLE
+        self._pending_futures: dict = {}
+        self._had_failures   = False
 
     def stop(self):
         self._stop = True
+        cancel_pending_futures(self._pending_futures)
 
     def _log(self, msg: str):
         logger.info(msg)
@@ -1462,6 +1485,8 @@ class DownloadWorker(QThread):
 
     def run(self):
         downloader = None
+        self.outcome = OUTCOME_RUNNING
+        self._had_failures = False
         try:
             self._log("Starting browser…")
             downloader = MagazineDownloader(
@@ -1484,6 +1509,7 @@ class DownloadWorker(QThread):
 
             if not logged_in:
                 if self.headless:
+                    self.outcome = OUTCOME_FAILED
                     self.signals.error.emit(
                         "Not logged in and headless mode is ON.\n"
                         "Disable headless mode so you can log in via the browser window."
@@ -1494,6 +1520,7 @@ class DownloadWorker(QThread):
                     timeout=LOGIN_TIMEOUT,
                     progress_fn=self.signals.status_msg.emit,
                 ):
+                    self.outcome = OUTCOME_FAILED
                     self.signals.error.emit("Login timed out. Please try again.")
                     return
                 # Save fresh cookies
@@ -1519,9 +1546,12 @@ class DownloadWorker(QThread):
 
                 self._log(f"\n-- {mag_name} --")
                 max_pages = 3 if self.test_mode else 110
-                links = downloader.collect_all_issue_links(
-                    archive_url, max_pages=max_pages, hint_prefix=prefix
-                )
+                try:
+                    links = downloader.collect_all_issue_links(
+                        archive_url, max_pages=max_pages, hint_prefix=prefix
+                    )
+                except ArchiveScanError as exc:
+                    raise ArchiveScanError(f"{mag_name}: {exc}") from exc
                 if not self.newest_first:   # list is already newest-first from the archive
                     links = list(reversed(links))
                 all_tasks.extend([(link, dest_dir, prefix, False, mag_name) for link in links])
@@ -1545,6 +1575,12 @@ class DownloadWorker(QThread):
             total = len(all_tasks)
             self._log(f"\nTotal issues found: {total}")
 
+            if total == 0:
+                self.outcome = OUTCOME_CANCELLED if self._stop else OUTCOME_NO_RESULTS
+                if self.outcome == OUTCOME_NO_RESULTS:
+                    self._log("No issues found to download.")
+                return
+
             mag_done: dict[str, int] = {}
             mag_total: dict[str, int] = {}
             for _, _, _, _, mn in all_tasks:
@@ -1556,97 +1592,119 @@ class DownloadWorker(QThread):
             done = 0
             with ThreadPoolExecutor(max_workers=3) as pool:
                 pending: dict = {}   # future → (issue_url, mag_name)
+                self._pending_futures = pending
 
-                for issue_url, dest_dir, prefix, flat, mag_name in all_tasks:
-                    if self._stop:
-                        self._log("Stopped by user.")
-                        break
+                try:
+                    for issue_url, dest_dir, prefix, flat, mag_name in all_tasks:
+                        if self._stop:
+                            self._log("Stopped by user.")
+                            cancel_pending_futures(pending)
+                            break
 
-                    scoped_key_value = progress_key(issue_url, dest_dir, flat)
-                    if _is_progress_completed(progress, issue_url, dest_dir, flat):
-                        self._log(f"[skip] {issue_url}")
-                        done += 1
-                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
-                        continue
+                        scoped_key_value = progress_key(issue_url, dest_dir, flat)
+                        if _is_progress_completed(progress, issue_url, dest_dir, flat):
+                            self._log(f"[skip] {issue_url}")
+                            done += 1
+                            self._emit_progress(done, total, mag_name, mag_done, mag_total)
+                            continue
 
-                    if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
-                        self._log(f"[exists] {issue_url}")
-                        completed_set.add(issue_url)
-                        _record_progress_completion(progress, issue_url, scoped_key_value)
-                        save_progress(progress)
-                        done += 1
-                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
-                        continue
+                        if issue_already_on_disk(issue_url, dest_dir, prefix, flat):
+                            self._log(f"[exists] {issue_url}")
+                            completed_set.add(issue_url)
+                            _record_progress_completion(progress, issue_url, scoped_key_value)
+                            save_progress(progress)
+                            done += 1
+                            self._emit_progress(done, total, mag_name, mag_done, mag_total)
+                            continue
 
-                    self._log(f"[{done + 1}/{total}] {issue_url}")
-                    try:
-                        downloader._driver.get(issue_url)
-                        time.sleep(2 + random.uniform(0, 0.5))
-                        mode, pdf_url = detect_download_mode(downloader._driver)
-                    except Exception as e:
-                        self._log(f"  Error loading page: {e}")
-                        _handle_result(False, str(e), issue_url,
-                                       progress, completed_set, self._log,
-                                       progress_key_value=scoped_key_value)
-                        done += 1
-                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
-                        continue
-
-                    if mode == "mode1":
-                        cookies = {
-                            c["name"]: c["value"]
-                            for c in downloader._driver.get_cookies()
-                        }
-                        fut = pool.submit(
-                            fetch_pdf, pdf_url, dest_dir, prefix,
-                            cookies, flat, downloader.download_dir, self._log
-                        )
-                        pending[fut] = (issue_url, mag_name, scoped_key_value)
-                        # Don't increment done yet — wait for future to complete
-                    elif mode == "mode2":
+                        self._log(f"[{done + 1}/{total}] {issue_url}")
                         try:
-                            ok, result = downloader._flipbook_download(
-                                issue_url, dest_dir, prefix, flat=flat
+                            downloader._driver.get(issue_url)
+                            time.sleep(2 + random.uniform(0, 0.5))
+                            mode, pdf_url = detect_download_mode(downloader._driver)
+                        except Exception as e:
+                            self._had_failures = True
+                            self._log(f"  Error loading page: {e}")
+                            _handle_result(False, str(e), issue_url,
+                                           progress, completed_set, self._log,
+                                           progress_key_value=scoped_key_value)
+                            done += 1
+                            self._emit_progress(done, total, mag_name, mag_done, mag_total)
+                            continue
+
+                        if mode == "mode1":
+                            cookies = {
+                                c["name"]: c["value"]
+                                for c in downloader._driver.get_cookies()
+                            }
+                            fut = pool.submit(
+                                fetch_pdf, pdf_url, dest_dir, prefix,
+                                cookies, flat, downloader.download_dir, self._log
                             )
+                            pending[fut] = (issue_url, mag_name, scoped_key_value)
+                            # Don't increment done yet — wait for future to complete
+                        elif mode == "mode2":
+                            try:
+                                ok, result = downloader._flipbook_download(
+                                    issue_url, dest_dir, prefix, flat=flat
+                                )
+                            except Exception as e:
+                                ok, result = False, str(e)
+                            if not ok and "read-only" not in result and "No PDF download available" not in result:
+                                self._had_failures = True
+                            _handle_result(ok, result, issue_url,
+                                           progress, completed_set, self._log,
+                                           progress_key_value=scoped_key_value)
+                            done += 1
+                            self._emit_progress(done, total, mag_name, mag_done, mag_total)
+                            time.sleep(1 + random.uniform(0, 0.5))
+                        else:  # mode3
+                            _handle_result(
+                                False, "No PDF download available (read-only issue)",
+                                issue_url, progress, completed_set, self._log,
+                                progress_key_value=scoped_key_value,
+                            )
+                            done += 1
+                            self._emit_progress(done, total, mag_name, mag_done, mag_total)
+
+                    # Stop requests cancel queued work; active requests are
+                    # drained so the executor can shut down cleanly.
+                    if self._stop:
+                        cancel_pending_futures(pending)
+                    for fut in as_completed(pending):
+                        if fut.cancelled():
+                            continue
+                        issue_url, mag_name, scoped_key_value = pending[fut]
+                        try:
+                            ok, result = fut.result()
                         except Exception as e:
                             ok, result = False, str(e)
+                        if not ok:
+                            self._had_failures = True
                         _handle_result(ok, result, issue_url,
                                        progress, completed_set, self._log,
                                        progress_key_value=scoped_key_value)
                         done += 1
                         self._emit_progress(done, total, mag_name, mag_done, mag_total)
-                        time.sleep(1 + random.uniform(0, 0.5))
-                    else:  # mode3
-                        _handle_result(
-                            False, "No PDF download available (read-only issue)",
-                            issue_url, progress, completed_set, self._log,
-                            progress_key_value=scoped_key_value,
-                        )
-                        done += 1
-                        self._emit_progress(done, total, mag_name, mag_done, mag_total)
+                finally:
+                    self._pending_futures = {}
 
-                # Drain completed Mode 1 futures
-                for fut in as_completed(pending):
-                    if self._stop:
-                        break
-                    issue_url, mag_name, scoped_key_value = pending[fut]
-                    try:
-                        ok, result = fut.result()
-                    except Exception as e:
-                        ok, result = False, str(e)
-                    _handle_result(ok, result, issue_url,
-                                   progress, completed_set, self._log,
-                                   progress_key_value=scoped_key_value)
-                    done += 1
-                    self._emit_progress(done, total, mag_name, mag_done, mag_total)
-
-            self._log(f"\nSession complete. {len(progress['completed'])} total downloaded.")
+            if self._stop:
+                self.outcome = OUTCOME_CANCELLED
+                self._log("\nSession cancelled.")
+            elif self._had_failures:
+                self.outcome = OUTCOME_FAILED
+                self._log("\nSession finished with failures.")
+            else:
+                self.outcome = OUTCOME_SUCCESS
+                self._log(f"\nSession complete. {len(progress['completed'])} total downloaded.")
 
             # Save cookies at the end of a successful run
             if self.cookies_path:
                 downloader.save_cookies(self.cookies_path)
 
         except Exception as e:
+            self.outcome = OUTCOME_FAILED
             logger.exception("Worker error")
             self.signals.error.emit(str(e))
         finally:
@@ -1700,6 +1758,8 @@ class MissingIssuesWorker(QThread):
         self.headless        = headless
         self.signals         = WorkerSignals()
         self._stop           = False
+        self.outcome         = OUTCOME_IDLE
+        self._had_failures   = False
 
     def stop(self):
         self._stop = True
@@ -1710,6 +1770,8 @@ class MissingIssuesWorker(QThread):
 
     def run(self):
         downloader = None
+        self.outcome = OUTCOME_RUNNING
+        self._had_failures = False
         try:
             # Build set of (year, month) targets
             targets: set[tuple[str, str]] = {
@@ -1718,6 +1780,7 @@ class MissingIssuesWorker(QThread):
                 for month in months
             }
             if not targets:
+                self.outcome = OUTCOME_NO_RESULTS
                 self._log("No missing issues to download.")
                 return
 
@@ -1743,6 +1806,7 @@ class MissingIssuesWorker(QThread):
 
             if not logged_in:
                 if self.headless:
+                    self.outcome = OUTCOME_FAILED
                     self.signals.error.emit(
                         "Not logged in and headless mode is ON.\n"
                         "Disable headless mode so you can log in via the browser window."
@@ -1753,6 +1817,7 @@ class MissingIssuesWorker(QThread):
                     timeout=LOGIN_TIMEOUT,
                     progress_fn=self.signals.status_msg.emit,
                 ):
+                    self.outcome = OUTCOME_FAILED
                     self.signals.error.emit("Login timed out. Please try again.")
                     return
                 if self.cookies_path:
@@ -1761,9 +1826,12 @@ class MissingIssuesWorker(QThread):
 
             # Collect all issue URLs from the archive
             self._log(f"Scanning archive: {self.archive_url}")
-            links = downloader.collect_all_issue_links(
-                self.archive_url, max_pages=110, hint_prefix=self.prefix
-            )
+            try:
+                links = downloader.collect_all_issue_links(
+                    self.archive_url, max_pages=110, hint_prefix=self.prefix
+                )
+            except ArchiveScanError as exc:
+                raise ArchiveScanError(f"{self.prefix}: {exc}") from exc
             self._log(f"Found {len(links)} issues in archive. Matching against missing list…")
 
             # Match each URL to a (year, month) by parsing its slug
@@ -1795,6 +1863,7 @@ class MissingIssuesWorker(QThread):
                     special.append(url)
 
             if not matched and not special:
+                self.outcome = OUTCOME_NO_RESULTS
                 self._log("Could not match any missing issues to archive URLs.")
                 self._log("Targets: " + ", ".join(f"{y}/{m}" for y, m in sorted(targets)))
                 sample_slugs = [url.rstrip("/").split("/")[-1] for url in links[:5]]
@@ -1835,6 +1904,8 @@ class MissingIssuesWorker(QThread):
 
                 ok, result = downloader.download_issue(url, dest_dir=self.dest_dir,
                                                        hint_prefix=self.prefix)
+                if not ok and "read-only" not in result and "No PDF download available" not in result:
+                    self._had_failures = True
                 _handle_result(
                     ok, result, url, progress, completed_set, self._log,
                     progress_key_value=scoped_key_value,
@@ -1858,6 +1929,8 @@ class MissingIssuesWorker(QThread):
 
                 ok, result = downloader.download_issue(url, dest_dir=special_dir,
                                                        hint_prefix=self.prefix, flat=True)
+                if not ok and "read-only" not in result and "No PDF download available" not in result:
+                    self._had_failures = True
                 _handle_result(
                     ok, result, url, progress, completed_set, self._log,
                     progress_key_value=scoped_key_value,
@@ -1875,10 +1948,21 @@ class MissingIssuesWorker(QThread):
                 if url != special[-1] and not self._stop:
                     time.sleep(1 + random.uniform(0, 0.5))
 
+            if self._stop:
+                self.outcome = OUTCOME_CANCELLED
+                self._log("\nMissing-issue download cancelled.")
+            elif self._had_failures:
+                self.outcome = OUTCOME_FAILED
+                self._log("\nMissing-issue download finished with failures.")
+            else:
+                self.outcome = OUTCOME_SUCCESS
+                self._log("\nMissing-issue download complete.")
+
             if self.cookies_path:
                 downloader.save_cookies(self.cookies_path)
 
         except Exception as e:
+            self.outcome = OUTCOME_FAILED
             logger.exception("MissingIssuesWorker error")
             self.signals.error.emit(str(e))
         finally:
@@ -2489,8 +2573,15 @@ class MainWindow(QMainWindow):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
-        self._log("--- Done ---")
-        self.status_label.setText("Done.")
+        outcome = getattr(self.worker, "outcome", OUTCOME_FAILED)
+        label = {
+            OUTCOME_SUCCESS: "Done",
+            OUTCOME_CANCELLED: "Cancelled",
+            OUTCOME_NO_RESULTS: "No issues found",
+            OUTCOME_FAILED: "Failed",
+        }.get(outcome, "Failed")
+        self._log(f"--- {label} ---")
+        self.status_label.setText(f"{label}.")
         self._tray.setToolTip("Trains Downloader — Idle")
 
     def _setup_tray(self):
@@ -2704,7 +2795,14 @@ class MainWindow(QMainWindow):
         self.dl_missing_btn.setEnabled(has_missing)
         self.dl_missing_stop_btn.setEnabled(False)
         self.progress_bar.setVisible(False)
-        self._log("--- Download complete ---")
+        outcome = getattr(self._missing_worker, "outcome", OUTCOME_FAILED)
+        label = {
+            OUTCOME_SUCCESS: "Download complete",
+            OUTCOME_CANCELLED: "Download cancelled",
+            OUTCOME_NO_RESULTS: "No missing issues found",
+            OUTCOME_FAILED: "Download failed",
+        }.get(outcome, "Download failed")
+        self._log(f"--- {label} ---")
 
 
 # ------------------------------------------------------------------------------
