@@ -3142,6 +3142,147 @@ class MainWindow(QMainWindow):
         ]
         return content
 
+    def _make_organize_panel(self) -> QWidget:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 12)
+        layout.setSpacing(12)
+        layout.addWidget(self._make_page_heading(
+            "Organize your PDFs",
+            "Rename, sort, validate, and report on an existing PDF folder.",
+        ))
+
+        self.src_edit = QLineEdit()
+        self.src_edit.setPlaceholderText("Folder containing PDFs to organize")
+        self.src_edit.setAccessibleName("Source folder")
+        layout.addWidget(self._make_path_card(
+            "Source folder",
+            "Choose the folder that contains the PDFs you want to inspect.",
+            self.src_edit,
+            lambda: self._pick_dir(self.src_edit),
+        ))
+
+        self.dst_edit = QLineEdit()
+        self.dst_edit.setPlaceholderText("Organized output folder")
+        self.dst_edit.setAccessibleName("Destination folder")
+        layout.addWidget(self._make_path_card(
+            "Destination folder",
+            "The destination may be the same as the source folder.",
+            self.dst_edit,
+            lambda: self._pick_dir(self.dst_edit),
+        ))
+
+        identification = QFrame()
+        identification.setProperty("role", "card")
+        identification_layout = QVBoxLayout(identification)
+        identification_layout.setContentsMargins(16, 13, 16, 13)
+        identification_layout.setSpacing(6)
+        identification_layout.addWidget(self._make_card_title(
+            "Magazine identification",
+            "Use Auto-detect unless filenames do not identify the publication.",
+        ))
+        self.prefix_combo = QComboBox()
+        self.prefix_combo.addItem("Auto-detect")
+        for info in MAGAZINES.values():
+            self.prefix_combo.addItem(info["prefix"])
+        self.prefix_combo.setAccessibleName("Magazine prefix")
+        self.prefix_combo.setMinimumWidth(180)
+        identification_layout.addWidget(self.prefix_combo)
+        layout.addWidget(identification)
+
+        self._organize_summary = QFrame()
+        self._organize_summary.setProperty("role", "card")
+        self._organize_summary.setVisible(False)
+        summary_layout = QVBoxLayout(self._organize_summary)
+        summary_layout.setContentsMargins(16, 13, 16, 13)
+        summary_layout.setSpacing(8)
+        summary_layout.addWidget(self._make_card_title(
+            "Organization results",
+            "Review the counts before downloading any missing issues.",
+        ))
+        tile_grid = QGridLayout()
+        tile_grid.setHorizontalSpacing(8)
+        tile_grid.setVerticalSpacing(8)
+        self._organize_summary_tiles = {}
+        tile_labels = (
+            "Moved", "Already correct", "Unrecognized",
+            "Corrupt", "Conflicts", "Metadata updated",
+        )
+        for index, label_text in enumerate(tile_labels):
+            tile = QFrame()
+            tile.setProperty("role", "card")
+            tile_layout = QVBoxLayout(tile)
+            tile_layout.setContentsMargins(10, 8, 10, 8)
+            value = QLabel("0")
+            value.setObjectName("summary_value")
+            value.setAlignment(Qt.AlignCenter)
+            caption = QLabel(label_text)
+            caption.setProperty("role", "muted")
+            caption.setAlignment(Qt.AlignCenter)
+            tile_layout.addWidget(value)
+            tile_layout.addWidget(caption)
+            self._organize_summary_tiles[label_text] = value
+            tile_grid.addWidget(tile, index // 3, index % 3)
+        summary_layout.addLayout(tile_grid)
+        self._missing_summary = QLabel("No downloadable missing issues identified.")
+        self._missing_summary.setProperty("role", "status")
+        self._missing_summary.setWordWrap(True)
+        summary_layout.addWidget(self._missing_summary)
+        layout.addWidget(self._organize_summary)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.org_btn = QPushButton("Organize PDFs")
+        self.org_btn.setProperty("role", "primary")
+        self.org_btn.setAccessibleName("Organize PDFs")
+        self.org_btn.clicked.connect(self._run_organize)
+        self.dl_missing_btn = QPushButton("Download missing issues")
+        self.dl_missing_btn.setAccessibleName("Download missing issues")
+        self.dl_missing_btn.setEnabled(False)
+        self.dl_missing_btn.clicked.connect(self._start_missing_download)
+        self.dl_missing_stop_btn = QPushButton("Stop")
+        self.dl_missing_stop_btn.setProperty("role", "danger")
+        self.dl_missing_stop_btn.setAccessibleName("Stop missing-issue download")
+        self.dl_missing_stop_btn.setEnabled(False)
+        self.dl_missing_stop_btn.clicked.connect(self._stop_missing_download)
+        actions.addWidget(self.org_btn, 2)
+        actions.addWidget(self.dl_missing_btn, 2)
+        actions.addWidget(self.dl_missing_stop_btn, 1)
+        layout.addLayout(actions)
+
+        self.src_edit.textChanged.connect(self._save_settings)
+        self.dst_edit.textChanged.connect(self._save_settings)
+        self.prefix_combo.currentIndexChanged.connect(self._save_settings)
+        self._org_config_controls = [
+            self.src_edit,
+            self.dst_edit,
+            self.prefix_combo,
+        ]
+        return content
+
+    def _render_organize_summary(self, summary: OrganizeSummary) -> None:
+        values = {
+            "Moved": summary.moved,
+            "Already correct": summary.already_correct,
+            "Unrecognized": summary.unrecognized,
+            "Corrupt": summary.corrupt,
+            "Conflicts": summary.conflicts,
+            "Metadata updated": summary.metadata_stamped,
+        }
+        for label, value in values.items():
+            self._organize_summary_tiles[label].setText(str(value))
+        self._organize_summary.show()
+        self._org_prefix, self._missing_by_year = _missing_download_selection(summary)
+        missing_count = sum(len(months) for months in self._missing_by_year.values())
+        if missing_count and self._org_prefix:
+            self._missing_summary.setText(
+                f"{missing_count} missing issue(s) identified for {self._org_prefix}."
+            )
+            self.dl_missing_btn.setEnabled(True)
+        else:
+            self._missing_summary.setText("No downloadable missing issues identified.")
+            self.dl_missing_btn.setEnabled(False)
+
     # -- Helpers --------------------------------------------------------------
     @staticmethod
     def _disconnect_worker(worker) -> None:
@@ -3452,11 +3593,15 @@ class MainWindow(QMainWindow):
 
         self._clear_log()
         self._reset_magazine_progress()
+        self._organize_summary.hide()
+        self._missing_summary.setText("Results will appear here after organizing.")
         self._log(f"Organizing PDFs from: {src}")
         self._log(f"                  to: {dst}\n")
 
         self.org_btn.setEnabled(False)
         self.dl_missing_btn.setEnabled(False)
+        for control in self._org_config_controls:
+            control.setEnabled(False)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
 
@@ -3474,6 +3619,8 @@ class MainWindow(QMainWindow):
 
     def _on_organize_finished(self):
         self.org_btn.setEnabled(True)
+        for control in self._org_config_controls:
+            control.setEnabled(True)
         self.progress_bar.setVisible(False)
 
         if self._org_worker.result is None:
@@ -3488,7 +3635,7 @@ class MainWindow(QMainWindow):
         for line in summary.report:
             self._log(line)
 
-        self._org_prefix, self._missing_by_year = _missing_download_selection(summary)
+        self._render_organize_summary(summary)
 
         has_missing = bool(self._missing_by_year) and self._org_prefix and \
                       _archive_url_for_prefix(self._org_prefix) is not None

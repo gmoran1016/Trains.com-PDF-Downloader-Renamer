@@ -5,7 +5,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PyQt5.QtWidgets import QApplication, QLabel
 
-from trains_app import MAGAZINES, MainWindow, _STYLESHEET
+from trains_app import MAGAZINES, MainWindow, OrganizeSummary, _STYLESHEET
 
 
 def test_redesigned_shell_has_scrollable_pages_and_navigation(qapp):
@@ -63,6 +63,36 @@ def test_select_all_and_clear_all_preserve_settings_mapping(window, qt_app):
     window.select_all_btn.click()
     qt_app.processEvents()
     assert all(button.isChecked() for button in window.mag_chips.values())
+
+
+def test_organize_page_exposes_contextual_inputs(window):
+    window._organize_nav_btn.click()
+    assert window.src_edit.isVisible()
+    assert window.dst_edit.isVisible()
+    assert window.prefix_combo.isVisible()
+    assert window.prefix_combo.currentText() == "Auto-detect"
+    assert window.org_btn.text() == "Organize PDFs"
+    assert window.dl_missing_btn.text() == "Download missing issues"
+    assert window.org_headless_cb.isVisible()
+
+
+def test_organize_summary_renders_counts_and_missing_state(window, qt_app):
+    window._organize_nav_btn.click()
+    summary = OrganizeSummary(
+        moved=4,
+        already_correct=2,
+        unrecognized=1,
+        corrupt=1,
+        conflicts=1,
+        metadata_stamped=5,
+        missing_by_prefix_year={"MRR": {"2025": ["March", "April"]}},
+    )
+    window._render_organize_summary(summary)
+    qt_app.processEvents()
+    assert window._organize_summary.isVisible()
+    assert window._organize_summary_tiles["Moved"].text() == "4"
+    assert "2 missing" in window._missing_summary.text()
+    assert window.dl_missing_btn.isEnabled()
 
 
 @pytest.fixture(scope="session")
