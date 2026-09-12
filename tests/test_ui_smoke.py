@@ -3,7 +3,15 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt5.QtWidgets import QApplication, QLabel
+from PyQt5.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QToolButton,
+)
 
 from trains_app import MAGAZINES, MainWindow, OrganizeSummary, _STYLESHEET
 
@@ -93,6 +101,33 @@ def test_organize_summary_renders_counts_and_missing_state(window, qt_app):
     assert window._organize_summary_tiles["Moved"].text() == "4"
     assert "2 missing" in window._missing_summary.text()
     assert window.dl_missing_btn.isEnabled()
+
+
+def test_archive_access_is_shared_and_activity_is_resizable(window, qt_app):
+    assert window.cookie_edit.accessibleName() == "Cookie file path"
+    assert window._activity_panel.isVisible()
+    assert window.log_filter.isVisible()
+    assert window.copy_errors_btn.isVisible()
+    initial = window._activity_splitter.sizes()
+    window._toggle_activity()
+    qt_app.processEvents()
+    assert window._activity_splitter.sizes()[1] > initial[1]
+
+
+def test_status_state_is_textual_and_not_color_only(window):
+    window._set_job_state("running", "Scanning 3 of 10")
+    assert "Scanning 3 of 10" in window._header_status.text()
+    assert "running" in window._header_status.accessibleName().lower()
+    window._set_job_state("failed", "Login timed out")
+    assert "Login timed out" in window._header_status.text()
+
+
+def test_all_visible_interactive_controls_have_accessible_names(window):
+    controls = window.findChildren(
+        (QPushButton, QToolButton, QCheckBox, QComboBox, QLineEdit)
+    )
+    assert controls
+    assert all(control.accessibleName() for control in controls if control.isVisible())
 
 
 @pytest.fixture(scope="session")

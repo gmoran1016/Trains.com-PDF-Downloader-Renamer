@@ -2920,6 +2920,32 @@ class MainWindow(QMainWindow):
             [max(260, total - (330 if expanded else 190)), 330 if expanded else 190]
         )
 
+    def _set_job_state(self, state: str, detail: str = "") -> None:
+        labels = {
+            "ready": "Ready",
+            "running": "Running",
+            "success": "Complete",
+            "failed": "Failed",
+            "cancelled": "Cancelled",
+            "empty": "No results",
+        }
+        text = labels.get(state, "Ready")
+        if detail:
+            text = f"{text} · {detail}"
+        self._header_status.setText(text)
+        self._header_status.setAccessibleName(f"Job status: {state} — {text}")
+        self.status_label.setText(text)
+        self._header_status.setProperty("state", state)
+        self._header_status.style().unpolish(self._header_status)
+        self._header_status.style().polish(self._header_status)
+
+    def _sync_busy_controls(self, busy: bool) -> None:
+        for control in (
+            *getattr(self, "_download_config_controls", []),
+            *getattr(self, "_org_config_controls", []),
+        ):
+            control.setEnabled(not busy)
+
     @staticmethod
     def _make_page_heading(title_text: str, description: str) -> QWidget:
         widget = QWidget()
@@ -3435,13 +3461,12 @@ class MainWindow(QMainWindow):
 
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
-        for control in self._download_config_controls:
-            control.setEnabled(False)
+        self._sync_busy_controls(True)
         self._reset_magazine_progress()
         self.progress_bar.setValue(0)
         self.progress_bar.setMaximum(1)
         self.progress_bar.setVisible(True)
-        self.status_label.setText("Starting…")
+        self._set_job_state("running", "Starting…")
 
         self._disconnect_worker(self.worker)
         self.worker = DownloadWorker(magazines, base_dir, headless, test, cookies, newest,
@@ -3458,24 +3483,25 @@ class MainWindow(QMainWindow):
         if self.worker:
             self.worker.stop()
             self._log("Stop requested — waiting for current issue to finish…")
+            self._set_job_state("running", "Stop requested")
         self.stop_btn.setEnabled(False)
 
     def _update_progress(self, current: int, total: int):
         if total > 0:
             self.progress_bar.setMaximum(total)
             self.progress_bar.setValue(current)
-            self.status_label.setText(f"{current} / {total} issues")
+            self._set_job_state("running", f"{current} / {total} issues")
             self._tray.setToolTip(f"Trains Downloader — {current} / {total} downloading…")
 
     def _on_error(self, msg: str):
         self._log(f"ERROR: {msg}")
+        self._set_job_state("failed", msg)
         QMessageBox.critical(self, "Error", msg)
 
     def _on_finished(self):
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        for control in self._download_config_controls:
-            control.setEnabled(True)
+        self._sync_busy_controls(False)
         self.progress_bar.setVisible(False)
         self.magazine_progress_panel.setVisible(False)
         outcome = getattr(self.worker, "outcome", OUTCOME_FAILED)
@@ -3486,7 +3512,13 @@ class MainWindow(QMainWindow):
             OUTCOME_FAILED: "Failed",
         }.get(outcome, "Failed")
         self._log(f"--- {label} ---")
-        self.status_label.setText(f"{label}.")
+        state = {
+            OUTCOME_SUCCESS: "success",
+            OUTCOME_CANCELLED: "cancelled",
+            OUTCOME_NO_RESULTS: "empty",
+            OUTCOME_FAILED: "failed",
+        }.get(outcome, "failed")
+        self._set_job_state(state, label)
         self._tray.setToolTip("Trains Downloader — Idle")
 
     def _setup_tray(self):
@@ -3600,10 +3632,10 @@ class MainWindow(QMainWindow):
 
         self.org_btn.setEnabled(False)
         self.dl_missing_btn.setEnabled(False)
-        for control in self._org_config_controls:
-            control.setEnabled(False)
+        self._sync_busy_controls(True)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
+        self._set_job_state("running", "Organizing PDFs")
 
         self._org_hint = hint
         self._org_dst  = dst
@@ -3619,11 +3651,11 @@ class MainWindow(QMainWindow):
 
     def _on_organize_finished(self):
         self.org_btn.setEnabled(True)
-        for control in self._org_config_controls:
-            control.setEnabled(True)
+        self._sync_busy_controls(False)
         self.progress_bar.setVisible(False)
 
         if self._org_worker.result is None:
+            self._set_job_state("failed", "Organizer did not return a result")
             return
         summary = self._org_worker.result
 
@@ -3636,6 +3668,7 @@ class MainWindow(QMainWindow):
             self._log(line)
 
         self._render_organize_summary(summary)
+        self._set_job_state("success", "Organization complete")
 
         has_missing = bool(self._missing_by_year) and self._org_prefix and \
                       _archive_url_for_prefix(self._org_prefix) is not None
@@ -3670,8 +3703,10 @@ class MainWindow(QMainWindow):
 
         self.dl_missing_btn.setEnabled(False)
         self.dl_missing_stop_btn.setEnabled(True)
+        self._sync_busy_controls(True)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
+        self._set_job_state("running", "Searching for missing issues")
 
         self._disconnect_worker(self._missing_worker)
         self._missing_worker = MissingIssuesWorker(
@@ -3694,6 +3729,7 @@ class MainWindow(QMainWindow):
         if self._missing_worker is not None and self._missing_worker.isRunning():
             self._missing_worker.stop()
             self._log("Stop requested…")
+            self._set_job_state("running", "Stop requested")
         self.dl_missing_stop_btn.setEnabled(False)
 
     def _update_org_progress(self, current: int, total: int):
@@ -3715,6 +3751,14 @@ class MainWindow(QMainWindow):
             OUTCOME_FAILED: "Download failed",
         }.get(outcome, "Download failed")
         self._log(f"--- {label} ---")
+        state = {
+            OUTCOME_SUCCESS: "success",
+            OUTCOME_CANCELLED: "cancelled",
+            OUTCOME_NO_RESULTS: "empty",
+            OUTCOME_FAILED: "failed",
+        }.get(outcome, "failed")
+        self._set_job_state(state, label)
+        self._sync_busy_controls(False)
 
 
 # ------------------------------------------------------------------------------
