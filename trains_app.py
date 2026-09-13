@@ -381,10 +381,12 @@ def fetch_pdf(url: str, dest_dir: str, hint_prefix: str | None,
 def detect_download_mode(driver) -> tuple[str, str | None]:
     """
     Inspect the currently-loaded page and return the download mode.
-    Returns ('mode1', pdf_url), ('mode2', None), or ('mode3', None).
+    Returns ('mode1', pdf_url), ('mode2', None), or ('mode3', detail).
     Mode 1 = direct <a> download link.
     Mode 2 = real3d flipbook reader.
     Mode 3 = read-only, no download.
+    For mode 3, detail is ``"gated"`` when the page is an authenticated
+    membership surface that the current account cannot access.
     """
     from selenium.webdriver.common.by import By
 
@@ -397,6 +399,9 @@ def detect_download_mode(driver) -> tuple[str, str | None]:
         if href:
             return "mode1", href
 
+    if _is_membership_gated(driver):
+        return "mode3", "gated"
+
     if _has_flipbook_trigger(driver):
         return "mode2", None
 
@@ -407,6 +412,10 @@ def _has_flipbook_trigger(driver) -> bool:
     """Return whether the issue page exposes a reader/viewer entry point."""
     from selenium.webdriver.common.by import By
 
+    # trains.com uses the same cover markup for open readers and locked
+    # membership cards.  A locked card is not a reader trigger.
+    if _is_membership_gated(driver):
+        return False
     if driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover"):
         return True
     for label in ("Read Magazine", "PDF Edition"):
@@ -415,6 +424,27 @@ def _has_flipbook_trigger(driver) -> bool:
         ):
             return True
     return False
+
+
+def _is_membership_gated(driver) -> bool:
+    """Return whether the current issue surface is locked behind membership."""
+    from selenium.webdriver.common.by import By
+
+    for selector in (
+        "div.ci-media.ci-media--gated",
+        ".ci-media .ci-btn--locked",
+        ".ci-media .ci-paywall",
+    ):
+        if driver.find_elements(By.CSS_SELECTOR, selector):
+            return True
+    return False
+
+
+def _gated_issue_message(issue_url: str) -> str:
+    return (
+        "PDF access requires an eligible trains.com Unlimited Membership: "
+        f"{issue_url}"
+    )
 
 
 def _handle_result(ok: bool, result: str, issue_url: str,
@@ -471,7 +501,9 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.8.3"
+BROWSER_COMMAND_TIMEOUT = 45
+BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
 # Full magazine names keyed by the file prefix used throughout this tool
 PREFIX_TO_TITLE: dict[str, str] = {
@@ -1040,13 +1072,20 @@ class MagazineDownloader:
     """
 
     def __init__(self, download_dir: str, headless: bool = False, log_fn=None):
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-
         self.download_dir = os.path.abspath(download_dir)
         os.makedirs(self.download_dir, exist_ok=True)
         self.log_fn = log_fn
+        self.headless = headless
+        self._session_cookies: list[dict] = []
         self._driver = None
+
+        self._driver = self._create_driver()
+        self._log("Browser started.")
+
+    def _create_driver(self):
+        """Create a configured Chrome session for the downloader."""
+        from selenium import webdriver
+        from selenium.webdriver.chrome.options import Options
 
         opts = Options()
         opts.add_argument("--start-maximized")
@@ -1061,7 +1100,7 @@ class MagazineDownloader:
             "download.directory_upgrade": True,
             "safebrowsing.enabled": True,
         })
-        if headless:
+        if self.headless:
             opts.add_argument("--headless=new")
             opts.add_argument("--window-size=1920,1080")
             opts.add_argument("--disable-gpu")
@@ -1069,8 +1108,23 @@ class MagazineDownloader:
         # Selenium 4.6+ selenium-manager auto-downloads the right chromedriver.
         # A fresh transport per command avoids stale keep-alive sockets being
         # reset while long trains.com pages are still loading.
-        self._driver = webdriver.Chrome(options=opts, keep_alive=False)
-        self._log("Browser started.")
+        driver = webdriver.Chrome(options=opts, keep_alive=False)
+        self._configure_browser_transport(driver)
+        return driver
+
+    @staticmethod
+    def _configure_browser_transport(driver) -> None:
+        """Bound local WebDriver HTTP calls so a dead driver cannot stall a run."""
+        command_executor = getattr(driver, "command_executor", None)
+        client_config = getattr(command_executor, "_client_config", None)
+        if client_config is not None:
+            client_config.timeout = BROWSER_COMMAND_TIMEOUT
+            return
+        # Compatibility with older Selenium 4 releases that predate the
+        # public ClientConfig path used by current Selenium.
+        set_timeout = getattr(command_executor, "set_timeout", None)
+        if set_timeout:
+            set_timeout(BROWSER_COMMAND_TIMEOUT)
 
     def _log(self, msg: str):
         logger.info(msg)
@@ -1078,8 +1132,8 @@ class MagazineDownloader:
             self.log_fn(msg)
 
     @staticmethod
-    def _is_transient_navigation_error(exc: Exception) -> bool:
-        """Return whether a browser transport failure is safe to retry."""
+    def _is_transient_browser_error(exc: Exception) -> bool:
+        """Return whether a local browser transport failure is safe to retry."""
         if isinstance(exc, (ConnectionError, TimeoutError)):
             return True
         message = repr(exc).lower()
@@ -1092,8 +1146,61 @@ class MagazineDownloader:
             "not connected to devtools",
             "invalid session id",
             "target window already closed",
+            "httpconnectionpool(host='localhost'",
+            "read timed out",
+            "max retries exceeded",
+            "newconnectionerror",
+            "session deleted",
+            "tab crashed",
             "10054",
         ))
+
+    @staticmethod
+    def _is_transient_navigation_error(exc: Exception) -> bool:
+        """Backward-compatible alias for the browser transport classifier."""
+        return MagazineDownloader._is_transient_browser_error(exc)
+
+    def _run_browser_command(self, operation, *, attempts: int = BROWSER_COMMAND_ATTEMPTS,
+                             description: str = "Browser command"):
+        """Run a browser operation and recover once if ChromeDriver dies."""
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return operation()
+            except Exception as exc:
+                last_error = exc
+                if attempt >= attempts or not self._is_transient_browser_error(exc):
+                    raise
+                self._log(
+                    f"{description} lost the browser connection; "
+                    f"restarting browser ({attempt}/{attempts - 1})…"
+                )
+                if not self._restart_browser():
+                    raise
+                time.sleep(0.5 + random.uniform(0, 0.5))
+        if last_error:
+            raise last_error
+        raise RuntimeError(f"{description} did not run")
+
+    def _restart_browser(self) -> bool:
+        """Replace a dead ChromeDriver session and restore saved cookies."""
+        old_driver = self._driver
+        try:
+            if old_driver:
+                old_driver.quit()
+        except Exception:
+            pass
+
+        try:
+            self._driver = self._create_driver()
+            if self._session_cookies:
+                self._restore_cookies(self._session_cookies)
+            self._log("Browser session restarted.")
+            return True
+        except Exception as exc:
+            logger.exception("Browser restart failed")
+            self._log(f"Browser restart failed: {exc}")
+            return False
 
     def _navigate(self, url: str, attempts: int = 3) -> None:
         """Navigate with bounded retries for transient ChromeDriver resets."""
@@ -1124,8 +1231,8 @@ class MagazineDownloader:
             pass
 
     # -- Cookies ------------------------------------------------------------
-    def add_cookies(self, cookies: list):
-        """Add a list of cookies to the current browser session."""
+    def _restore_cookies(self, cookies: list[dict]) -> int:
+        """Restore cookies into the active session; return the number added."""
         # Must be on the target domain first
         self._navigate("https://www.trains.com/")
         time.sleep(1)
@@ -1139,11 +1246,29 @@ class MagazineDownloader:
                 added += 1
             except Exception as e:
                 logger.debug(f"Skipping cookie {c.get('name', '?')}: {e}")
+        return added
+
+    def add_cookies(self, cookies: list):
+        """Add a list of cookies to the current browser session."""
+        self._session_cookies = [
+            dict(c) for c in cookies if isinstance(c, dict)
+        ]
+        added = self._restore_cookies(self._session_cookies)
         self._log(f"Added {added}/{len(cookies)} cookies.")
 
     def save_cookies(self, path: str):
         cookies = self._driver.get_cookies()
+        self._session_cookies = [dict(c) for c in cookies]
         save_cookies_json(cookies, path)
+
+    def _remember_current_cookies(self) -> None:
+        """Snapshot cookies so a later browser restart can retain login state."""
+        try:
+            self._session_cookies = [
+                dict(c) for c in self._driver.get_cookies()
+            ]
+        except Exception:
+            pass
 
     # -- Login ---------------------------------------------------------------
     def is_logged_in(self, url: str = "https://www.trains.com/") -> bool:
@@ -1173,6 +1298,7 @@ class MagazineDownloader:
                 "log out", "logout", "sign out", "my account",
                 "hello,", "my benefits",
             )):
+                self._remember_current_cookies()
                 self._log("Login detected.")
                 return True
             remaining = int(deadline - time.time())
@@ -1216,6 +1342,15 @@ class MagazineDownloader:
     @retry(attempts=3, exceptions=(Exception,))
     def get_page_issue_links(self, url: str, archive_url: str,
                              hint_prefix: str | None = None) -> list[str]:
+        return self._run_browser_command(
+            lambda: self._get_page_issue_links_once(
+                url, archive_url, hint_prefix=hint_prefix
+            ),
+            description="Archive page inspection",
+        )
+
+    def _get_page_issue_links_once(self, url: str, archive_url: str,
+                                   hint_prefix: str | None = None) -> list[str]:
         from selenium.webdriver.support.ui import WebDriverWait
 
         self._navigate(url)
@@ -1235,6 +1370,8 @@ class MagazineDownloader:
                 ) in ("interactive", "complete")
             )
         except Exception as exc:
+            if self._is_transient_browser_error(exc):
+                raise
             raise ArchiveScanError(f"Archive page did not finish loading: {url}") from exc
 
         raw_hrefs = self._driver.execute_script(
@@ -1309,43 +1446,61 @@ class MagazineDownloader:
         Mode 3 — Read-only: very old digitised-only issues have no
           download button at all → skipped gracefully.
         """
-        from selenium.webdriver.common.by import By
-
         try:
-            self._navigate(issue_url)
-            time.sleep(2 + random.uniform(0, 0.5))
-
-            # ---- Mode 1: direct <a> download link ---------------------------
-            pdf_url = None
-            for el in self._driver.find_elements(By.CSS_SELECTOR, "a.ci-btn--secondary[href]"):
-                href = (el.get_attribute("href") or "").strip()
-                if href:
-                    pdf_url = href
-                    break
-            if not pdf_url:
-                for el in self._driver.find_elements(
-                    By.XPATH, "//a[normalize-space(.)='Download' and @href]"
-                ):
-                    href = (el.get_attribute("href") or "").strip()
-                    if href:
-                        pdf_url = href
-                        break
-            if pdf_url:
-                cookies = {c["name"]: c["value"] for c in self._driver.get_cookies()}
-                return self._fetch_pdf(pdf_url, dest_dir, hint_prefix, cookies, flat=flat)
-
-            # ---- Mode 2: flipbook reader ----------------------------------------
-            # The btnDownloadPdf span only exists AFTER the reader is opened.
-            # Detect the flipbook cover div or "Read Magazine" button as the trigger.
-            if _has_flipbook_trigger(self._driver):
-                return self._flipbook_download(issue_url, dest_dir, hint_prefix, flat=flat)
-
-            # ---- Mode 3: no download available (read-only) ------------------
-            return False, f"No PDF download available for {issue_url} (read-only issue)"
+            return self._run_browser_command(
+                lambda: self._download_issue_once(
+                    issue_url, dest_dir, hint_prefix, flat=flat
+                ),
+                description="Issue download",
+            )
 
         except Exception as e:
             logger.exception(f"Error downloading {issue_url}")
             return False, str(e)
+
+    def _download_issue_once(self, issue_url: str, dest_dir: str,
+                             hint_prefix: str | None,
+                             flat: bool = False) -> tuple[bool, str]:
+        """Perform one issue attempt; the public method supplies recovery."""
+        from selenium.webdriver.common.by import By
+
+        self._navigate(issue_url)
+        time.sleep(2 + random.uniform(0, 0.5))
+
+        # ---- Mode 1: direct <a> download link -------------------------------
+        pdf_url = None
+        for el in self._driver.find_elements(By.CSS_SELECTOR, "a.ci-btn--secondary[href]"):
+            href = (el.get_attribute("href") or "").strip()
+            if href:
+                pdf_url = href
+                break
+        if not pdf_url:
+            for el in self._driver.find_elements(
+                By.XPATH, "//a[normalize-space(.)='Download' and @href]"
+            ):
+                href = (el.get_attribute("href") or "").strip()
+                if href:
+                    pdf_url = href
+                    break
+        if pdf_url:
+            cookies = {c["name"]: c["value"] for c in self._driver.get_cookies()}
+            return self._fetch_pdf(pdf_url, dest_dir, hint_prefix, cookies, flat=flat)
+
+        # ---- Membership gate ------------------------------------------------
+        # The public cover card is not an interactive reader when the issue is
+        # locked.  Return immediately instead of spending 60 seconds clicking
+        # a paywall while waiting for a toolbar that cannot appear.
+        if _is_membership_gated(self._driver):
+            return False, _gated_issue_message(issue_url)
+
+        # ---- Mode 2: flipbook reader ----------------------------------------
+        # The btnDownloadPdf span only exists AFTER the reader is opened.
+        # Detect the flipbook cover div or "Read Magazine" button as the trigger.
+        if _has_flipbook_trigger(self._driver):
+            return self._flipbook_download(issue_url, dest_dir, hint_prefix, flat=flat)
+
+        # ---- Mode 3: no download available (read-only) ----------------------
+        return False, f"No PDF download available for {issue_url} (read-only issue)"
 
     def _flipbook_download(self, issue_url: str, dest_dir: str,
                            hint_prefix: str | None, flat: bool = False) -> tuple[bool, str]:
@@ -1356,6 +1511,9 @@ class MagazineDownloader:
         from selenium.webdriver.common.by import By
         from selenium.webdriver.support.ui import WebDriverWait
         from selenium.webdriver.support import expected_conditions as EC
+
+        if _is_membership_gated(self._driver):
+            return False, _gated_issue_message(issue_url)
 
         def pdf_files():
             return {
@@ -1403,13 +1561,20 @@ class MagazineDownloader:
                         return img
                 except Exception:
                     continue
-            # Fallback: the ci-media__cover div
-            covers = self._driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover")
+            # Fallback: an unlocked ci-media cover.  Do not click the cover of
+            # a locked membership card; it is visually similar but has no
+            # reader behind it.
+            covers = self._driver.find_elements(
+                By.CSS_SELECTOR,
+                "div.ci-media:not(.ci-media--gated) div.ci-media__cover",
+            )
             if covers:
                 return covers[0]
             for label in ("PDF Edition", "Read Magazine"):
                 buttons = self._driver.find_elements(
-                    By.XPATH, f"//button[contains(normalize-space(.), '{label}')]"
+                    By.XPATH,
+                    "//button[not(contains(@class, 'ci-btn--locked')) and "
+                    f"contains(normalize-space(.), '{label}')]",
                 )
                 if buttons:
                     return buttons[0]
@@ -1710,9 +1875,15 @@ class DownloadWorker(QThread):
 
                         self._log(f"[{done + 1}/{total}] {issue_url}")
                         try:
-                            downloader._navigate(issue_url)
-                            time.sleep(2 + random.uniform(0, 0.5))
-                            mode, pdf_url = detect_download_mode(downloader._driver)
+                            def inspect_issue():
+                                downloader._navigate(issue_url)
+                                time.sleep(2 + random.uniform(0, 0.5))
+                                return detect_download_mode(downloader._driver)
+
+                            mode, mode_detail = downloader._run_browser_command(
+                                inspect_issue,
+                                description="Issue inspection",
+                            )
                         except Exception as e:
                             self._had_failures = True
                             self._log(f"  Error loading page: {e}")
@@ -1724,10 +1895,25 @@ class DownloadWorker(QThread):
                             continue
 
                         if mode == "mode1":
-                            cookies = {
-                                c["name"]: c["value"]
-                                for c in downloader._driver.get_cookies()
-                            }
+                            try:
+                                cookies = downloader._run_browser_command(
+                                    lambda: {
+                                        c["name"]: c["value"]
+                                        for c in downloader._driver.get_cookies()
+                                    },
+                                    description="Read browser cookies",
+                                )
+                            except Exception as e:
+                                self._had_failures = True
+                                self._log(f"  Error reading browser cookies: {e}")
+                                _handle_result(
+                                    False, str(e), issue_url,
+                                    progress, completed_set, self._log,
+                                    progress_key_value=scoped_key_value,
+                                )
+                                done += 1
+                                self._emit_progress(done, total, mag_name, mag_done, mag_total)
+                                continue
                             fut = pool.submit(
                                 fetch_pdf, pdf_url, dest_dir, prefix,
                                 cookies, flat, downloader.download_dir, self._log
@@ -1736,8 +1922,19 @@ class DownloadWorker(QThread):
                             # Don't increment done yet — wait for future to complete
                         elif mode == "mode2":
                             try:
-                                ok, result = downloader._flipbook_download(
-                                    issue_url, dest_dir, prefix, flat=flat
+                                def download_flipbook():
+                                    # A retry after a dead session needs the
+                                    # issue page loaded again before looking
+                                    # for the reader trigger.
+                                    downloader._navigate(issue_url)
+                                    time.sleep(2 + random.uniform(0, 0.5))
+                                    return downloader._flipbook_download(
+                                        issue_url, dest_dir, prefix, flat=flat
+                                    )
+
+                                ok, result = downloader._run_browser_command(
+                                    download_flipbook,
+                                    description="Flipbook download",
                                 )
                             except Exception as e:
                                 ok, result = False, str(e)
@@ -1750,8 +1947,13 @@ class DownloadWorker(QThread):
                             self._emit_progress(done, total, mag_name, mag_done, mag_total)
                             time.sleep(1 + random.uniform(0, 0.5))
                         else:  # mode3
+                            if mode_detail == "gated":
+                                self._had_failures = True
+                                result = _gated_issue_message(issue_url)
+                            else:
+                                result = "No PDF download available (read-only issue)"
                             _handle_result(
-                                False, "No PDF download available (read-only issue)",
+                                False, result,
                                 issue_url, progress, completed_set, self._log,
                                 progress_key_value=scoped_key_value,
                             )
