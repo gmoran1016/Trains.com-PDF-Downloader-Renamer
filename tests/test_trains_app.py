@@ -431,6 +431,75 @@ def test_browser_navigation_retries_connection_reset(monkeypatch):
     assert any("retrying" in message.lower() for message in logs)
 
 
+def test_browser_transport_timeout_is_classified_as_transient():
+    from trains_app import MagazineDownloader
+
+    error = RuntimeError(
+        "HTTPConnectionPool(host='localhost', port=65006): "
+        "Read timed out. (read timeout=120)"
+    )
+
+    assert MagazineDownloader._is_transient_navigation_error(error) is True
+
+
+def test_browser_command_retries_after_restarting_transient_session(monkeypatch):
+    from trains_app import MagazineDownloader
+
+    logs = []
+    downloader = object.__new__(MagazineDownloader)
+    downloader.log_fn = logs.append
+    restarted = []
+    downloader._restart_browser = lambda: restarted.append(True) or True
+    calls = []
+
+    def flaky_command():
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError(
+                "HTTPConnectionPool(host='localhost', port=65006): "
+                "Read timed out. (read timeout=120)"
+            )
+        return "ok"
+
+    assert downloader._run_browser_command(
+        flaky_command,
+        description="Issue inspection",
+    ) == "ok"
+    assert len(calls) == 2
+    assert restarted == [True]
+    assert any("restarting" in message.lower() for message in logs)
+
+
+def test_browser_http_command_timeout_is_bounded(monkeypatch, tmp_path):
+    import selenium.webdriver
+
+    from trains_app import MagazineDownloader
+
+    class ClientConfig:
+        timeout = 120
+
+    class FakeDriver:
+        command_executor = type("Executor", (), {
+            "_client_config": ClientConfig(),
+        })()
+
+        def quit(self):
+            pass
+
+    captured = {}
+
+    def fake_chrome(**kwargs):
+        captured["kwargs"] = kwargs
+        captured["driver"] = FakeDriver()
+        return captured["driver"]
+
+    monkeypatch.setattr(selenium.webdriver, "Chrome", fake_chrome)
+    downloader = MagazineDownloader(str(tmp_path), headless=True)
+    downloader.close()
+
+    assert captured["driver"].command_executor._client_config.timeout <= 60
+
+
 def test_cancel_pending_futures_only_cancels_not_started_work():
     from concurrent.futures import Future
     from trains_app import cancel_pending_futures
