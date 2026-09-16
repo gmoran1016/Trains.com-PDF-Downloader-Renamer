@@ -566,3 +566,65 @@ def test_download_worker_stop_is_cancelled_not_success(monkeypatch, tmp_path):
     worker.run()
 
     assert worker.outcome == trains_app.OUTCOME_CANCELLED
+
+
+def test_download_worker_passes_direct_pdf_url_from_issue_mode(monkeypatch, tmp_path):
+    import trains_app
+
+    issue_url = "https://www.trains.com/mrr/magazine/october-2026/"
+    pdf_url = "https://cdn.example/MAG-MRR-OCT26.pdf"
+    captured = {}
+
+    class Driver:
+        def get_cookies(self):
+            return [{"name": "auth", "value": "token"}]
+
+    class DirectDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self.download_dir = download_dir
+            self._driver = Driver()
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            return [issue_url]
+
+        def detect_issue_mode(self, *_args, **_kwargs):
+            return "mode1", pdf_url
+
+        def _run_browser_command(self, operation, **_kwargs):
+            return operation()
+
+        def close(self):
+            pass
+
+    def fake_fetch_pdf(url, dest_dir, prefix, cookies, flat, download_dir, log_fn):
+        captured.update(
+            url=url,
+            dest_dir=dest_dir,
+            prefix=prefix,
+            cookies=cookies,
+            flat=flat,
+        )
+        return True, "downloaded.pdf"
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", DirectDownloader)
+    monkeypatch.setattr(trains_app, "fetch_pdf", fake_fetch_pdf)
+    monkeypatch.setattr(trains_app, "PROGRESS_FILE", str(tmp_path / "progress.json"))
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    worker = trains_app.DownloadWorker(
+        ["Model Railroader"], str(tmp_path), False, True, None, True,
+        include_specials=False,
+    )
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_SUCCESS
+    assert captured == {
+        "url": pdf_url,
+        "dest_dir": str(tmp_path / "MRR"),
+        "prefix": "MRR",
+        "cookies": {"auth": "token"},
+        "flat": False,
+    }

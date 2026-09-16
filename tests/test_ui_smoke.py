@@ -52,6 +52,25 @@ def test_high_end_palette_uses_paper_ink_and_copper_tokens(qapp):
         window.deleteLater()
 
 
+def test_redesign_restores_transparent_labels_and_readable_disabled_text(qapp):
+    redesign_start = _STYLESHEET.index("/* ── Archive workstation redesign")
+    redesign_styles = _STYLESHEET[redesign_start:]
+
+    assert "QLabel { background-color: transparent; }" in redesign_styles
+    assert (
+        "QLineEdit:disabled, QComboBox:disabled { "
+        "background: #E8E3D9; color: #56666D; }"
+    ) in redesign_styles
+    assert (
+        "QPushButton:disabled, QToolButton:disabled { "
+        "background: #E8E4DB; color: #56666D;"
+    ) in redesign_styles
+    assert (
+        'QPushButton[role="primary"]:disabled { '
+        "background: #E8E4DB; border-color: #D2CCC2; color: #56666D; }"
+    ) in redesign_styles
+
+
 def test_navigation_switches_workflow_pages(qapp):
     window = MainWindow()
     try:

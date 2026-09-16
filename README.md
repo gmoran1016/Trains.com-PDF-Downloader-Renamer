@@ -8,9 +8,9 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 | Platform | File |
 |----------|------|
-| Windows  | `TrainsDownloader-windows.zip` → extract → run `TrainsDownloader.exe` |
-| Linux    | `TrainsDownloader-linux.zip` → extract → `chmod +x TrainsDownloader` → run |
-| macOS    | `TrainsDownloader-macos.zip` → extract → run `TrainsDownloader` |
+| Windows  | `TrainsDownloader-windows.exe` → run directly |
+| Linux    | `TrainsDownloader-linux` → `chmod +x TrainsDownloader-linux` → run |
+| macOS    | `TrainsDownloader-macos` → run directly |
 
 > **Requirement:** Google Chrome must be installed. The matching ChromeDriver is downloaded automatically on first run.
 
@@ -40,6 +40,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
   - Very old digitised-only issues skipped gracefully
 - **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
 - **Cookie-based authentication** — log in once and sessions are reused across runs
+- **Authenticated HTTP fallback** — if ChromeDriver receives Trains.com's anti-bot 403 page, saved authenticated cookies are used for archive discovery and direct PDF downloads
 - **Settings persistence** — save location, cookies path, headless mode, sort order, and magazine selections are remembered between sessions
 - **Per-magazine progress rows** — the resizable activity drawer shows each magazine's download progress with an ETA estimate
 - **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel
@@ -59,6 +60,10 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 ## Authentication
 
 A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json`, leave **Hide download browser** unchecked, and click **Start download**. Chrome will open for you to log in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
+
+The application keeps local runtime state beside the executable or source file. This includes `session_cookies.json`, `settings.json`, `download_progress.json`, `special_issues.json`, and `trains_downloader.log`; these files are intentionally ignored by Git. The cookie file contains authenticated session data and must remain private.
+
+Recent issues normally expose a direct PDF link and can use the authenticated HTTP fallback. Older issues may use the embedded flipbook reader, which still requires browser HTML access. Read-only or membership-gated issues are reported without being treated as successful downloads.
 
 ---
 
@@ -118,6 +123,14 @@ build.bat
 ```
 
 Output: `dist\TrainsDownloader.exe`
+
+---
+
+`build.bat` runs the test suite before building and recreates the `build/` and `dist/` directories. Keep runtime files such as cookies, settings, and downloaded magazines outside `dist/`.
+
+### GitHub Actions
+
+Pushes to `main` run [`.github/workflows/build.yml`](.github/workflows/build.yml). The workflow runs the full pytest suite, builds Windows, Linux, and macOS executables, and publishes the platform artifacts to the release matching `APP_VERSION`.
 
 ---
 

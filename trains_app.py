@@ -20,7 +20,8 @@ from pathlib import Path
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit, urlunsplit
+from html.parser import HTMLParser
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 try:
     import pypdf
@@ -106,6 +107,11 @@ SPECIAL_ISSUES_FILE = os.path.join(_BASE_DIR, "special_issues.json")
 SETTINGS_FILE       = os.path.join(_BASE_DIR, "settings.json")
 DOWNLOAD_TIMEOUT = 120   # seconds to wait for a PDF download
 LOGIN_TIMEOUT = 300      # seconds to wait for manual login (5 min)
+HTTP_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/140.0.0.0 Safari/537.36"
+)
 
 OUTCOME_IDLE = "idle"
 OUTCOME_RUNNING = "running"
@@ -121,6 +127,42 @@ class ArchiveScanError(RuntimeError):
 
 class ArchiveRedirectError(ArchiveScanError):
     """Raised when an archive request lands on an unrelated URL."""
+
+
+class _AnchorParser(HTMLParser):
+    """Extract visible anchor text and hrefs without adding an HTML dependency."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.links: list[tuple[str, str]] = []
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() == "a":
+            self._href = dict(attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.links.append((self._href, " ".join(self._text).strip()))
+            self._href = None
+            self._text = []
+
+
+def _extract_anchor_links(html: str, base_url: str) -> list[tuple[str, str]]:
+    parser = _AnchorParser()
+    parser.feed(html or "")
+    parser.close()
+    return [
+        (urljoin(base_url, href.strip()), text)
+        for href, text in parser.links
+        if href and href.strip()
+    ]
 
 
 def _canonical_url(url: str) -> str:
@@ -343,11 +385,7 @@ def fetch_pdf(url: str, dest_dir: str, hint_prefix: str | None,
     time.sleep(0.5 + random.uniform(0, 1.0))  # rate limiting
 
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
-        )
+        "User-Agent": HTTP_USER_AGENT,
     }
     tmp_path = None
     try:
@@ -1270,12 +1308,146 @@ class MagazineDownloader:
         except Exception:
             pass
 
+    def _cookie_dict(self) -> dict[str, str]:
+        """Return the current session cookies in the shape requests expects."""
+        cookies = list(getattr(self, "_session_cookies", []) or [])
+        if not cookies:
+            try:
+                cookies = list(self._driver.get_cookies() or [])
+            except Exception:
+                cookies = []
+        return {
+            str(cookie["name"]): str(cookie["value"])
+            for cookie in cookies
+            if isinstance(cookie, dict)
+            and cookie.get("name") is not None
+            and cookie.get("value") is not None
+        }
+
+    @staticmethod
+    def _is_browser_blocked_page(driver) -> bool:
+        """Detect the small 403 page returned by the site's anti-bot layer."""
+        try:
+            title = str(getattr(driver, "title", "") or "").strip().lower()
+        except Exception:
+            title = ""
+        if title in {"403 forbidden", "access denied", "forbidden"}:
+            return True
+        try:
+            source = str(getattr(driver, "page_source", "") or "").lower()
+        except Exception:
+            source = ""
+        return len(source) <= 20_000 and any(
+            marker in source
+            for marker in ("<title>403 forbidden", "<h1>403 forbidden", "error 403")
+        )
+
+    def _fetch_authenticated_html(
+        self,
+        url: str,
+        *,
+        expected_scope: str | None = None,
+    ) -> tuple[str, str]:
+        """Fetch a page with saved cookies when Selenium is blocked by 403."""
+        import requests as _req
+
+        response = _req.get(
+            url,
+            cookies=self._cookie_dict(),
+            headers={
+                "User-Agent": HTTP_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+            },
+            timeout=BROWSER_COMMAND_TIMEOUT,
+        )
+        response.raise_for_status()
+        final_url = str(getattr(response, "url", url) or url)
+        if expected_scope and not _canonical_url(final_url).startswith(
+            _canonical_url(expected_scope)
+        ):
+            raise ArchiveRedirectError(
+                f"HTTP archive request redirected outside the requested route: "
+                f"{url} → {final_url}"
+            )
+        return response.text, final_url
+
+    @staticmethod
+    def _detect_download_mode_from_html(
+        html: str,
+        base_url: str,
+    ) -> tuple[str, str | None]:
+        """Detect direct, viewer, gated, or read-only issues from HTML."""
+        links = _extract_anchor_links(html, base_url)
+        for href, text in links:
+            path = urlsplit(href).path.lower()
+            if text.strip().lower() == "download" and path.endswith(".pdf"):
+                return "mode1", href
+
+        lowered = (html or "").lower()
+        if any(marker in lowered for marker in (
+            "ci-media.ci-media--gated",
+            "ci-media--gated",
+            "ci-btn--locked",
+            "ci-paywall",
+        )):
+            return "mode3", "gated"
+        if any(marker in lowered for marker in (
+            "ci-media__cover",
+            "read magazine",
+            "pdf edition",
+        )):
+            return "mode2", None
+        return "mode3", None
+
+    def _get_page_issue_links_via_http(
+        self,
+        url: str,
+        archive_url: str,
+        hint_prefix: str | None = None,
+    ) -> list[str]:
+        """Collect issue links from authenticated HTML when browser HTML is blocked."""
+        self._log(
+            "Browser returned 403 for the archive page; "
+            "using authenticated HTTP fallback."
+        )
+        html, _ = self._fetch_authenticated_html(
+            url,
+            expected_scope=archive_url,
+        )
+        links: list[str] = []
+        for raw_href, _text in _extract_anchor_links(html, url):
+            href = self._canonical_url(raw_href)
+            if self._is_issue_link(href, archive_url, hint_prefix=hint_prefix) \
+                    and href not in links:
+                links.append(href)
+        return links
+
+    def detect_issue_mode(
+        self,
+        issue_url: str,
+        hint_prefix: str | None = None,
+    ) -> tuple[str, str | None]:
+        """Inspect an issue using Selenium, with an authenticated HTTP fallback."""
+        self._navigate(issue_url)
+        time.sleep(2 + random.uniform(0, 0.5))
+        if self._is_browser_blocked_page(self._driver):
+            html, final_url = self._fetch_authenticated_html(
+                issue_url,
+                expected_scope="https://www.trains.com/",
+            )
+            return self._detect_download_mode_from_html(html, final_url)
+        return detect_download_mode(self._driver)
+
     # -- Login ---------------------------------------------------------------
     def is_logged_in(self, url: str = "https://www.trains.com/") -> bool:
         try:
             self._navigate(url)
             time.sleep(2)
-            src = self._driver.page_source.lower()
+            if self._is_browser_blocked_page(self._driver):
+                src, _ = self._fetch_authenticated_html(url)
+            else:
+                src = self._driver.page_source
+            src = src.lower()
             return any(k in src for k in (
                 "log out", "logout", "sign out", "my account",
                 "hello,", "my benefits",
@@ -1361,6 +1533,13 @@ class MagazineDownloader:
             raise ArchiveRedirectError(
                 f"Archive redirected outside the requested route: {url} → "
                 f"{self._driver.current_url}"
+            )
+
+        if self._is_browser_blocked_page(self._driver):
+            return self._get_page_issue_links_via_http(
+                url,
+                archive_url,
+                hint_prefix=hint_prefix,
             )
 
         try:
@@ -1466,6 +1645,29 @@ class MagazineDownloader:
 
         self._navigate(issue_url)
         time.sleep(2 + random.uniform(0, 0.5))
+
+        if self._is_browser_blocked_page(self._driver):
+            html, final_url = self._fetch_authenticated_html(
+                issue_url,
+                expected_scope="https://www.trains.com/",
+            )
+            mode, detail = self._detect_download_mode_from_html(html, final_url)
+            if mode == "mode1" and detail:
+                return self._fetch_pdf(
+                    detail,
+                    dest_dir,
+                    hint_prefix,
+                    self._cookie_dict(),
+                    flat=flat,
+                )
+            if detail == "gated":
+                return False, _gated_issue_message(issue_url)
+            if mode == "mode2":
+                return False, (
+                    "Flipbook download requires browser HTML access, but the "
+                    f"site blocked the browser session: {issue_url}"
+                )
+            return False, f"No PDF download available for {issue_url} (read-only issue)"
 
         # ---- Mode 1: direct <a> download link -------------------------------
         pdf_url = None
@@ -1876,14 +2078,16 @@ class DownloadWorker(QThread):
                         self._log(f"[{done + 1}/{total}] {issue_url}")
                         try:
                             def inspect_issue():
-                                downloader._navigate(issue_url)
-                                time.sleep(2 + random.uniform(0, 0.5))
-                                return detect_download_mode(downloader._driver)
+                                return downloader.detect_issue_mode(
+                                    issue_url,
+                                    hint_prefix=prefix,
+                                )
 
                             mode, mode_detail = downloader._run_browser_command(
                                 inspect_issue,
                                 description="Issue inspection",
                             )
+                            pdf_url = mode_detail
                         except Exception as e:
                             self._had_failures = True
                             self._log(f"  Error loading page: {e}")
@@ -2481,6 +2685,7 @@ QMainWindow, QWidget {
     font-family: "Segoe UI", sans-serif;
     font-size: 10pt;
 }
+QLabel { background-color: transparent; }
 QWidget#app_header { background: transparent; }
 QLabel#brand_mark {
     background: #183B49;
@@ -2549,7 +2754,7 @@ QLineEdit, QComboBox {
     selection-color: #17242B;
 }
 QLineEdit:focus, QComboBox:focus { background: #FFFFFF; border: 2px solid #A95530; }
-QLineEdit:disabled, QComboBox:disabled { background: #E8E3D9; color: #7A858B; }
+QLineEdit:disabled, QComboBox:disabled { background: #E8E3D9; color: #56666D; }
 QLineEdit::placeholder { color: #637177; }
 QComboBox QAbstractItemView { background: #FFFCF7; color: #17242B; selection-background-color: #D8E5E8; }
 QPushButton, QToolButton {
@@ -2563,13 +2768,13 @@ QPushButton, QToolButton {
 }
 QPushButton:hover, QToolButton:hover { background: #DED8CD; border-color: #A95530; }
 QPushButton:pressed, QToolButton:pressed { background: #D2CBC0; }
-QPushButton:disabled, QToolButton:disabled { background: #E8E4DB; color: #899399; border-color: #D2CCC2; }
+QPushButton:disabled, QToolButton:disabled { background: #E8E4DB; color: #56666D; border-color: #D2CCC2; }
 QPushButton:focus, QToolButton:focus, QCheckBox:focus { border: 2px solid #A95530; }
 QPushButton[role="primary"] { background: #A95530; border-color: #874226; color: #FFFCF7; font-weight: 800; min-height: 42px; }
 QPushButton[role="primary"]:hover { background: #914C2E; }
-QPushButton[role="primary"]:disabled { background: #E8E4DB; border-color: #D2CCC2; color: #899399; }
+QPushButton[role="primary"]:disabled { background: #E8E4DB; border-color: #D2CCC2; color: #56666D; }
 QPushButton[role="danger"] { background: #F8E8E4; border-color: #DDB2AA; color: #AD4D45; }
-QPushButton[role="danger"]:disabled { background: #E8E4DB; border-color: #D2CCC2; color: #899399; }
+QPushButton[role="danger"]:disabled { background: #E8E4DB; border-color: #D2CCC2; color: #56666D; }
 QCheckBox { color: #17242B; spacing: 8px; min-height: 36px; }
 QCheckBox::indicator { width: 18px; height: 18px; border: 2px solid #718087; border-radius: 4px; background: #FFFCF7; }
 QCheckBox::indicator:hover { border-color: #A95530; }

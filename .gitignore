@@ -31,7 +31,9 @@ ehthumbs.db
 # Runtime data — generated at runtime, never commit
 session_cookies.json
 session_cookies.pkl
+settings.json
 download_progress.json
+special_issues.json
 *.log
 
 # PyInstaller build output

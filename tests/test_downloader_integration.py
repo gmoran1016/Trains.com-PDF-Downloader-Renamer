@@ -128,6 +128,114 @@ def test_page_links_are_extracted_in_one_browser_script_call():
     assert driver.href_script_calls == 1
 
 
+def test_archive_page_falls_back_to_authenticated_http_when_browser_is_blocked(
+    monkeypatch,
+):
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.page_source = "<html><title>403 Forbidden</title></html>"
+    driver.title = "403 Forbidden"
+    downloader = _downloader(driver)
+    downloader._session_cookies = [
+        {"name": "kserv-session", "value": "session-token"}
+    ]
+
+    class Response:
+        status_code = 200
+        text = f'<a href="{archive}october-2026/">October 2026</a>'
+
+        def raise_for_status(self):
+            return None
+
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["cookies"] = kwargs["cookies"]
+        return Response()
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert downloader.get_page_issue_links(
+        archive,
+        archive,
+        hint_prefix="MRR",
+    ) == [f"{archive}october-2026/"]
+    assert captured == {
+        "url": archive,
+        "cookies": {"kserv-session": "session-token"},
+    }
+
+
+def test_direct_issue_download_falls_back_to_authenticated_http_when_browser_is_blocked(
+    monkeypatch,
+    tmp_path,
+):
+    issue_url = "https://www.trains.com/mrr/magazine/october-2026/"
+    driver = ModeDriver()
+    driver.page_source = "<html><title>403 Forbidden</title></html>"
+    driver.title = "403 Forbidden"
+    downloader = _downloader(driver)
+    downloader.download_dir = str(tmp_path / "raw")
+    downloader._session_cookies = [
+        {"name": "kserv-session", "value": "session-token"}
+    ]
+    downloader._fetch_pdf = lambda url, dest_dir, hint_prefix, cookies, flat: (
+        True,
+        f"{url}|{dest_dir}|{hint_prefix}|{cookies['kserv-session']}|{flat}",
+    )
+
+    class Response:
+        status_code = 200
+        text = '<a href="https://cdn.example/MAG-MRR-OCT26.pdf">Download</a>'
+
+        def raise_for_status(self):
+            return None
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: Response())
+
+    assert downloader.download_issue(
+        issue_url,
+        str(tmp_path / "organized"),
+        hint_prefix="MRR",
+    ) == (
+        True,
+        "https://cdn.example/MAG-MRR-OCT26.pdf|"
+        f"{tmp_path / 'organized'}|MRR|session-token|False",
+    )
+
+
+def test_issue_mode_uses_authenticated_http_when_browser_is_blocked(monkeypatch):
+    issue_url = "https://www.trains.com/mrr/magazine/october-2026/"
+    driver = ModeDriver()
+    driver.page_source = "<html><title>403 Forbidden</title></html>"
+    driver.title = "403 Forbidden"
+    downloader = _downloader(driver)
+    downloader._session_cookies = [
+        {"name": "kserv-session", "value": "session-token"}
+    ]
+
+    class Response:
+        status_code = 200
+        text = '<a href="https://cdn.example/MAG-MRR-OCT26.pdf">Download</a>'
+
+        def raise_for_status(self):
+            return None
+
+    import requests
+
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: Response())
+
+    assert downloader.detect_issue_mode(issue_url, hint_prefix="MRR") == (
+        "mode1",
+        "https://cdn.example/MAG-MRR-OCT26.pdf",
+    )
+
+
 def test_archive_page_recovers_when_chromedriver_dies_during_script(monkeypatch):
     archive = "https://www.trains.com/mrr/magazine/"
     hrefs = [f"{archive}october-2026/"]
