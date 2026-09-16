@@ -41,6 +41,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 - **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
 - **Cookie-based authentication** — log in once and sessions are reused across runs
 - **Authenticated HTTP fallback** — if ChromeDriver receives Trains.com's anti-bot 403 page, saved authenticated cookies are used for archive discovery and direct PDF downloads
+- **403-safe archive discovery** — unauthenticated archive requests can be rejected by Trains.com; the app reuses an authenticated session, treats the normal end-of-pagination response as completion, and reports genuinely unavailable pages instead of looping
 - **Settings persistence** — save location, cookies path, headless mode, sort order, and magazine selections are remembered between sessions
 - **Per-magazine progress rows** — the resizable activity drawer shows each magazine's download progress with an ETA estimate
 - **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel
@@ -64,6 +65,8 @@ A trains.com subscription is required. On first run, leave the cookie file field
 The application keeps local runtime state beside the executable or source file. This includes `session_cookies.json`, `settings.json`, `download_progress.json`, `special_issues.json`, and `trains_downloader.log`; these files are intentionally ignored by Git. The cookie file contains authenticated session data and must remain private.
 
 Recent issues normally expose a direct PDF link and can use the authenticated HTTP fallback. Older issues may use the embedded flipbook reader, which still requires browser HTML access. Read-only or membership-gated issues are reported without being treated as successful downloads.
+
+Some archive pages intentionally expose only a cover or print instructions and do not contain a reader or PDF control. Those pages are read-only and are skipped quickly; they are not retried as if a flipbook were available. A valid subscription and the required issue access are still necessary for downloadable flipbooks. A public, unauthenticated HTTP request returning `403 Forbidden` is not evidence that the archive is empty — sign in through the visible Chrome session first.
 
 ---
 
@@ -130,7 +133,15 @@ Output: `dist\TrainsDownloader.exe`
 
 ### GitHub Actions
 
-Pushes to `main` run [`.github/workflows/build.yml`](.github/workflows/build.yml). The workflow runs the full pytest suite, builds Windows, Linux, and macOS executables, and publishes the platform artifacts to the release matching `APP_VERSION`.
+Every push to `main` runs [`.github/workflows/build.yml`](.github/workflows/build.yml). The workflow runs the full pytest suite on Windows, Linux, and macOS, builds one-file windowed PyInstaller executables, and publishes all three platform assets to the release matching `APP_VERSION`:
+
+| Platform | GitHub Release asset |
+|----------|----------------------|
+| Windows  | `TrainsDownloader-windows.exe` |
+| Linux    | `TrainsDownloader-linux` |
+| macOS    | `TrainsDownloader-macos` |
+
+The workflow is also available through **Actions → Build Executables → Run workflow**. A successful run should show three completed matrix jobs and a release containing all three assets. The local `build/`, `dist/`, generated PyInstaller spec, runtime state, and downloaded files are intentionally excluded from Git; use the release assets for distribution rather than committing a workstation build.
 
 ---
 

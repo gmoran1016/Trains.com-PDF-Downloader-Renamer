@@ -451,10 +451,11 @@ def _has_flipbook_trigger(driver) -> bool:
     from selenium.webdriver.common.by import By
 
     # trains.com uses the same cover markup for open readers and locked
-    # membership cards.  A locked card is not a reader trigger.
+    # membership cards.  A cover by itself is not a reader trigger: some
+    # special-issue pages expose only artwork and print instructions.
     if _is_membership_gated(driver):
         return False
-    if driver.find_elements(By.CSS_SELECTOR, "div.ci-media__cover"):
+    if driver.find_elements(By.CSS_SELECTOR, ".real3dflipbook"):
         return True
     for label in ("Read Magazine", "PDF Edition"):
         if driver.find_elements(
@@ -1392,7 +1393,7 @@ class MagazineDownloader:
         )):
             return "mode3", "gated"
         if any(marker in lowered for marker in (
-            "ci-media__cover",
+            "real3dflipbook",
             "read magazine",
             "pdf edition",
         )):
@@ -1586,6 +1587,10 @@ class MagazineDownloader:
             except ArchiveScanError:
                 raise
             except Exception as e:
+                status_code = getattr(getattr(e, "response", None), "status_code", None)
+                if status_code == 404 and all_links:
+                    self._log(f"  No more issues after page {page_num - 1} -- done.")
+                    break
                 self._log(f"  Error on page {page_num}: {e}")
                 break
 

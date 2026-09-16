@@ -236,6 +236,24 @@ def test_issue_mode_uses_authenticated_http_when_browser_is_blocked(monkeypatch)
     )
 
 
+def test_authenticated_html_cover_without_reader_controls_is_read_only():
+    html = """
+    <div class="ci-media">
+      <div class="ci-media__cover">
+        <img class="ci-media__cover-img" src="cover.jpg">
+      </div>
+      <a class="ci-help__link" href="/print-help/">
+        Download &amp; Print Instructions
+      </a>
+    </div>
+    """
+
+    assert MagazineDownloader._detect_download_mode_from_html(
+        html,
+        "https://www.trains.com/mrr/magazine/special-issues/example/",
+    ) == ("mode3", None)
+
+
 def test_archive_page_recovers_when_chromedriver_dies_during_script(monkeypatch):
     archive = "https://www.trains.com/mrr/magazine/"
     hrefs = [f"{archive}october-2026/"]
@@ -292,6 +310,38 @@ def test_regular_empty_archive_is_an_error():
         )
 
 
+def test_later_archive_404_ends_pagination_without_error(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/special-issues/"
+    issue = f"{archive}great-model-railroads-2024/"
+    downloader = _downloader(FakeDriver(current_url=archive))
+    logs = []
+    downloader.log_fn = logs.append
+
+    response = requests.Response()
+    response.status_code = 404
+    response.url = f"{archive}page/2/"
+    not_found = requests.HTTPError("404 Client Error: Not Found", response=response)
+
+    def fake_get_page_issue_links(url, *_args, **_kwargs):
+        if url.endswith("page/2/"):
+            raise not_found
+        return [issue]
+
+    downloader.get_page_issue_links = fake_get_page_issue_links
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    assert downloader.collect_all_issue_links(
+        archive,
+        max_pages=3,
+        hint_prefix="MRR",
+        allow_empty=True,
+    ) == [issue]
+    assert not any("Error on page" in message for message in logs)
+    assert any("No more issues after page 1" in message for message in logs)
+
+
 def test_special_redirect_can_be_reported_as_empty():
     archive = "https://www.trains.com/grw/magazine/special-issues/"
     driver = FakeDriver(
@@ -332,6 +382,18 @@ def test_detect_download_mode_skips_locked_issue_cover_as_gated():
     mode, href = detect_download_mode(GatedModeDriver())
 
     assert (mode, href) == ("mode3", "gated")
+
+
+def test_detect_download_mode_does_not_treat_cover_only_as_flipbook():
+    from trains_app import detect_download_mode
+
+    class CoverOnlyDriver(ModeDriver):
+        def find_elements(self, _by, selector):
+            if selector == "div.ci-media__cover":
+                return [FakeElement()]
+            return super().find_elements(_by, selector)
+
+    assert detect_download_mode(CoverOnlyDriver()) == ("mode3", None)
 
 
 def test_download_issue_reports_gated_access_without_opening_cover(monkeypatch, tmp_path):
