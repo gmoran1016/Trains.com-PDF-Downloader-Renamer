@@ -1,6 +1,6 @@
 # Trains.com Magazine Downloader & Organizer
 
-**v1.8.3** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
+**v1.8.4** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
 
 ## Download
 
@@ -61,6 +61,8 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 ## Authentication
 
 A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json`, leave **Hide download browser** unchecked, and click **Start download**. Chrome will open for you to log in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
+
+If the browser connection drops during login, the app restarts Chrome once, restores any saved cookies, and reopens Trains.com. Continue signing in in the replacement window. Recovery uses the time remaining in the original five-minute login window; repeated disconnections produce a clear error so you can start again.
 
 The application keeps local runtime state beside the executable or source file. This includes `session_cookies.json`, `settings.json`, `download_progress.json`, `special_issues.json`, and `trains_downloader.log`; these files are intentionally ignored by Git. The cookie file contains authenticated session data and must remain private.
 

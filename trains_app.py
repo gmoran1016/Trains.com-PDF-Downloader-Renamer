@@ -540,7 +540,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.8.3"
+APP_VERSION = "1.8.4"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -1441,7 +1441,7 @@ class MagazineDownloader:
 
     # -- Login ---------------------------------------------------------------
     def is_logged_in(self, url: str = "https://www.trains.com/") -> bool:
-        try:
+        def check_login():
             self._navigate(url)
             time.sleep(2)
             if self._is_browser_blocked_page(self._driver):
@@ -1453,6 +1453,11 @@ class MagazineDownloader:
                 "log out", "logout", "sign out", "my account",
                 "hello,", "my benefits",
             ))
+
+        try:
+            return self._run_browser_command(
+                check_login, description="Login check"
+            )
         except Exception as e:
             logger.error(f"Login check error: {e}")
             return False
@@ -1462,23 +1467,45 @@ class MagazineDownloader:
         Open trains.com in the visible browser and poll until the user
         has successfully logged in (or timeout expires).
         """
-        self._navigate("https://www.trains.com/")
-        self._log("Please log in via the browser window. Waiting…")
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            src = self._driver.page_source.lower()
-            if any(k in src for k in (
-                "log out", "logout", "sign out", "my account",
-                "hello,", "my benefits",
-            )):
-                self._remember_current_cookies()
-                self._log("Login detected.")
-                return True
-            remaining = int(deadline - time.time())
-            if progress_fn:
-                progress_fn(f"Waiting for login… ({remaining}s remaining)")
-            time.sleep(3)
-        return False
+        # Keep one deadline across recovery; a dead session must not grant
+        # another full login timeout or cause an endless restart loop.
+        deadline = time.monotonic() + timeout
+
+        def wait_for_login():
+            if time.monotonic() >= deadline:
+                return False
+            # A replacement browser starts on a blank page. Reopen the login
+            # entry point once per attempt, never during normal polling.
+            self._navigate("https://www.trains.com/")
+            self._log("Please log in via the browser window. Waiting…")
+            while time.monotonic() < deadline:
+                src = self._driver.page_source.lower()
+                if any(k in src for k in (
+                    "log out", "logout", "sign out", "my account",
+                    "hello,", "my benefits",
+                )):
+                    self._remember_current_cookies()
+                    self._log("Login detected.")
+                    return True
+                remaining = max(0.0, deadline - time.monotonic())
+                if progress_fn:
+                    progress_fn(f"Waiting for login… ({int(remaining)}s remaining)")
+                time.sleep(min(3, remaining))
+            return False
+
+        try:
+            return self._run_browser_command(
+                wait_for_login, description="Manual login"
+            )
+        except Exception as exc:
+            if not self._is_transient_browser_error(exc):
+                raise
+            logger.exception("Browser connection failed during manual login")
+            raise RuntimeError(
+                "The browser connection was lost during login and automatic "
+                "recovery could not reconnect. Start the download again and "
+                "keep the login browser window open."
+            ) from exc
 
     # -- Issue link collection ------------------------------------------------
     @staticmethod
