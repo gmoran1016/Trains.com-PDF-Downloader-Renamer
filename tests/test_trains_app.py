@@ -390,6 +390,9 @@ def test_browser_uses_non_persistent_webdriver_transport(monkeypatch, tmp_path):
     captured = {}
 
     class FakeDriver:
+        def execute_cdp_cmd(self, _command, _params):
+            return {}
+
         def quit(self):
             pass
 
@@ -482,6 +485,9 @@ def test_browser_http_command_timeout_is_bounded(monkeypatch, tmp_path):
         command_executor = type("Executor", (), {
             "_client_config": ClientConfig(),
         })()
+
+        def execute_cdp_cmd(self, _command, _params):
+            return {}
 
         def quit(self):
             pass

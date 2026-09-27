@@ -540,7 +540,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.8.4"
+APP_VERSION = "1.8.5"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -1148,7 +1148,23 @@ class MagazineDownloader:
         # A fresh transport per command avoids stale keep-alive sockets being
         # reset while long trains.com pages are still loading.
         driver = webdriver.Chrome(options=opts, keep_alive=False)
-        self._configure_browser_transport(driver)
+        try:
+            self._configure_browser_transport(driver)
+            # ChromeDriver 154 on Windows can exhaust its stack while attaching
+            # to a burst of embedded frames on Trains.com. We automate only the
+            # top-level document; frames still render and accept manual input.
+            # Configure this before navigation, including on session recovery.
+            driver.execute_cdp_cmd("Target.setAutoAttach", {
+                "autoAttach": False,
+                "waitForDebuggerOnStart": False,
+                "flatten": True,
+            })
+        except Exception:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            raise
         return driver
 
     @staticmethod
@@ -1502,9 +1518,10 @@ class MagazineDownloader:
                 raise
             logger.exception("Browser connection failed during manual login")
             raise RuntimeError(
-                "The browser connection was lost during login and automatic "
-                "recovery could not reconnect. Start the download again and "
-                "keep the login browser window open."
+                "The browser's automation connection was lost during login "
+                "and automatic recovery failed. Chrome may still be open. "
+                "Start the download again; if it fails again, check "
+                "trains_downloader.log for details."
             ) from exc
 
     # -- Issue link collection ------------------------------------------------
