@@ -124,6 +124,10 @@ OUTCOME_NO_RESULTS = "no-results"
 class ArchiveScanError(RuntimeError):
     """Raised when an archive page cannot be trusted as a usable archive."""
 
+    def __init__(self, message: str, partial_links: list[str] | None = None):
+        super().__init__(message)
+        self.partial_links = list(partial_links or [])
+
 
 class ArchiveRedirectError(ArchiveScanError):
     """Raised when an archive request lands on an unrelated URL."""
@@ -540,7 +544,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.8.5"
+APP_VERSION = "1.8.6"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -1624,19 +1628,33 @@ class MagazineDownloader:
                     url, archive_url, hint_prefix=hint_prefix
                 )
             except ArchiveRedirectError as exc:
-                if allow_empty and is_special_archive:
+                if allow_empty and is_special_archive and not all_links:
                     self._log(f"  Special-issue route unavailable: {exc}")
                     return []
+                exc.partial_links = list(all_links)
                 raise
-            except ArchiveScanError:
+            except ArchiveScanError as exc:
+                exc.partial_links = list(dict.fromkeys(
+                    [*all_links, *exc.partial_links]
+                ))
                 raise
             except Exception as e:
                 status_code = getattr(getattr(e, "response", None), "status_code", None)
                 if status_code == 404 and all_links:
                     self._log(f"  No more issues after page {page_num - 1} -- done.")
                     break
-                self._log(f"  Error on page {page_num}: {e}")
-                break
+                if status_code == 404 and allow_empty and is_special_archive:
+                    self._log("  No special issues found -- done.")
+                    break
+                if status_code == 404 and page_num == 1:
+                    raise ArchiveScanError(
+                        f"Archive returned no issue links on page 1: {archive_url}",
+                        partial_links=all_links,
+                    ) from e
+                raise ArchiveScanError(
+                    f"Error loading archive page {page_num} ({url}): {e}",
+                    partial_links=all_links,
+                ) from e
 
             new = [l for l in page_links if l not in all_links]
             if not new:
@@ -2058,7 +2076,11 @@ class DownloadWorker(QThread):
                         archive_url, max_pages=max_pages, hint_prefix=prefix
                     )
                 except ArchiveScanError as exc:
-                    raise ArchiveScanError(f"{mag_name}: {exc}") from exc
+                    self._had_failures = True
+                    links = exc.partial_links
+                    self._log(
+                        f"  Archive scan incomplete for {mag_name}: {exc}"
+                    )
                 if not self.newest_first:   # list is already newest-first from the archive
                     links = list(reversed(links))
                 all_tasks.extend([(link, dest_dir, prefix, False, mag_name) for link in links])
@@ -2067,12 +2089,19 @@ class DownloadWorker(QThread):
                     specials_url = archive_url + "special-issues/"
                     special_dir  = os.path.join(dest_dir, "Special Issues")
                     self._log(f"  Checking special issues at {specials_url}…")
-                    special_links = downloader.collect_all_issue_links(
-                        specials_url,
-                        max_pages=max_pages,
-                        hint_prefix=prefix,
-                        allow_empty=True,
-                    )
+                    try:
+                        special_links = downloader.collect_all_issue_links(
+                            specials_url,
+                            max_pages=max_pages,
+                            hint_prefix=prefix,
+                            allow_empty=True,
+                        )
+                    except ArchiveScanError as exc:
+                        self._had_failures = True
+                        special_links = exc.partial_links
+                        self._log(
+                            f"  Special-issue scan incomplete for {mag_name}: {exc}"
+                        )
                     if not self.newest_first:
                         special_links = list(reversed(special_links))
                     if special_links:
@@ -2083,7 +2112,15 @@ class DownloadWorker(QThread):
             self._log(f"\nTotal issues found: {total}")
 
             if total == 0:
-                self.outcome = OUTCOME_CANCELLED if self._stop else OUTCOME_NO_RESULTS
+                if self._stop:
+                    self.outcome = OUTCOME_CANCELLED
+                elif self._had_failures:
+                    self.outcome = OUTCOME_FAILED
+                    self._log(
+                        "Archive discovery was incomplete; no issues were available to download."
+                    )
+                else:
+                    self.outcome = OUTCOME_NO_RESULTS
                 if self.outcome == OUTCOME_NO_RESULTS:
                     self._log("No issues found to download.")
                 return

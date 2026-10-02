@@ -1,6 +1,6 @@
 # Trains.com Magazine Downloader & Organizer
 
-**v1.8.5** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
+**v1.8.6** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
 
 ## Download
 
@@ -41,7 +41,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 - **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
 - **Cookie-based authentication** — log in once and sessions are reused across runs
 - **Authenticated HTTP fallback** — if ChromeDriver receives Trains.com's anti-bot 403 page, saved authenticated cookies are used for archive discovery and direct PDF downloads
-- **403-safe archive discovery** — unauthenticated archive requests can be rejected by Trains.com; the app reuses an authenticated session, treats the normal end-of-pagination response as completion, and reports genuinely unavailable pages instead of looping
+- **Truthful archive discovery** — temporary request failures are retried; a blocked or interrupted archive scan is reported as a failure, preserves issues already found, and never appears as a complete or empty scan
 - **Settings persistence** — save location, cookies path, headless mode, sort order, and magazine selections are remembered between sessions
 - **Per-magazine progress rows** — the resizable activity drawer shows each magazine's download progress with an ETA estimate
 - **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel

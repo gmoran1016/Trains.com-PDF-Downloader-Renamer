@@ -546,6 +546,100 @@ def test_download_worker_classifies_empty_archive_as_no_results(monkeypatch, tmp
     assert worker.outcome == trains_app.OUTCOME_NO_RESULTS
 
 
+def test_download_worker_marks_empty_failed_scan_as_failure(monkeypatch, tmp_path):
+    import trains_app
+
+    class BlockedDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self._driver = None
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            raise trains_app.ArchiveScanError("HTTP 403 while reading page 1")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", BlockedDownloader)
+    worker = trains_app.DownloadWorker(
+        ["Model Railroader"], str(tmp_path), False, True, None, True,
+        include_specials=False,
+    )
+
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_FAILED
+    assert worker._had_failures is True
+
+
+def test_download_worker_downloads_partial_results_and_continues_after_scan_failure(
+    monkeypatch, tmp_path
+):
+    import trains_app
+
+    mrr_issue = "https://www.trains.com/mrr/magazine/november-2026/"
+    trn_issue = "https://www.trains.com/trn/magazine/november-2026/"
+    pdf_urls = {
+        mrr_issue: "https://cdn.example/MAG-MRR-NOV26.pdf",
+        trn_issue: "https://cdn.example/MAG-TRN-NOV26.pdf",
+    }
+    scanned = []
+    downloaded = []
+
+    class Driver:
+        def get_cookies(self):
+            return []
+
+    class PartialFailureDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self.download_dir = download_dir
+            self._driver = Driver()
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, archive_url, **_kwargs):
+            scanned.append(archive_url)
+            if archive_url == trains_app.MAGAZINES["Model Railroader"]["url"]:
+                raise trains_app.ArchiveScanError(
+                    "HTTP 403 while reading page 2", partial_links=[mrr_issue]
+                )
+            return [trn_issue]
+
+        def detect_issue_mode(self, issue_url, **_kwargs):
+            return "mode1", pdf_urls[issue_url]
+
+        def _run_browser_command(self, operation, **_kwargs):
+            return operation()
+
+        def close(self):
+            pass
+
+    def fake_fetch_pdf(url, dest_dir, prefix, cookies, flat, download_dir, log_fn):
+        downloaded.append(url)
+        return True, url.rsplit("/", 1)[-1]
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", PartialFailureDownloader)
+    monkeypatch.setattr(trains_app, "fetch_pdf", fake_fetch_pdf)
+    monkeypatch.setattr(trains_app, "PROGRESS_FILE", str(tmp_path / "progress.json"))
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    worker = trains_app.DownloadWorker(
+        ["Model Railroader", "Trains Magazine"], str(tmp_path), False, True, None, True,
+        include_specials=False,
+    )
+    worker.run()
+
+    assert scanned == [
+        trains_app.MAGAZINES["Model Railroader"]["url"],
+        trains_app.MAGAZINES["Trains Magazine"]["url"],
+    ]
+    assert set(downloaded) == set(pdf_urls.values())
+    assert worker.outcome == trains_app.OUTCOME_FAILED
+
+
 def test_download_worker_stop_is_cancelled_not_success(monkeypatch, tmp_path):
     import trains_app
 

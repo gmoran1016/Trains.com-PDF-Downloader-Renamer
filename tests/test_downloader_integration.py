@@ -342,6 +342,65 @@ def test_later_archive_404_ends_pagination_without_error(monkeypatch):
     assert any("No more issues after page 1" in message for message in logs)
 
 
+def test_archive_page_403_is_a_scan_error_with_no_partial_links():
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    response = requests.Response()
+    response.status_code = 403
+    response.url = archive
+    forbidden = requests.HTTPError("403 Client Error: Forbidden", response=response)
+    downloader = _downloader(FakeDriver(current_url=archive))
+    downloader.get_page_issue_links = lambda *_args, **_kwargs: (_ for _ in ()).throw(forbidden)
+
+    with pytest.raises(ArchiveScanError, match="403") as exc_info:
+        downloader.collect_all_issue_links(archive, max_pages=2, hint_prefix="MRR")
+
+    assert exc_info.value.partial_links == []
+
+
+def test_later_archive_403_preserves_links_from_successful_pages(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    issue = f"{archive}november-2026/"
+    response = requests.Response()
+    response.status_code = 403
+    response.url = f"{archive}page/2/"
+    forbidden = requests.HTTPError("403 Client Error: Forbidden", response=response)
+    downloader = _downloader(FakeDriver(current_url=archive))
+
+    def fake_get_page_issue_links(url, *_args, **_kwargs):
+        if url.endswith("page/2/"):
+            raise forbidden
+        return [issue]
+
+    downloader.get_page_issue_links = fake_get_page_issue_links
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    with pytest.raises(ArchiveScanError, match="403") as exc_info:
+        downloader.collect_all_issue_links(archive, max_pages=3, hint_prefix="MRR")
+
+    assert exc_info.value.partial_links == [issue]
+
+
+def test_optional_special_archive_403_is_not_treated_as_empty():
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/special-issues/"
+    response = requests.Response()
+    response.status_code = 403
+    response.url = archive
+    forbidden = requests.HTTPError("403 Client Error: Forbidden", response=response)
+    downloader = _downloader(FakeDriver(current_url=archive))
+    downloader.get_page_issue_links = lambda *_args, **_kwargs: (_ for _ in ()).throw(forbidden)
+
+    with pytest.raises(ArchiveScanError, match="403"):
+        downloader.collect_all_issue_links(
+            archive, max_pages=1, hint_prefix="MRR", allow_empty=True
+        )
+
+
 def test_special_redirect_can_be_reported_as_empty():
     archive = "https://www.trains.com/grw/magazine/special-issues/"
     driver = FakeDriver(
