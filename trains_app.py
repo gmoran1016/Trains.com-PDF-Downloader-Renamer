@@ -2414,7 +2414,12 @@ class MissingIssuesWorker(QThread):
                     self.archive_url, max_pages=110, hint_prefix=self.prefix
                 )
             except ArchiveScanError as exc:
-                raise ArchiveScanError(f"{self.prefix}: {exc}") from exc
+                self._had_failures = True
+                links = exc.partial_links
+                self._log(
+                    f"Archive scan incomplete for {self.prefix}: {exc}; "
+                    f"continuing with {len(links)} issue(s) found so far."
+                )
             self._log(f"Found {len(links)} issues in archive. Matching against missing list…")
 
             # Match each URL to a (year, month) by parsing its slug
@@ -2446,8 +2451,16 @@ class MissingIssuesWorker(QThread):
                     special.append(url)
 
             if not matched and not special:
-                self.outcome = OUTCOME_NO_RESULTS
-                self._log("Could not match any missing issues to archive URLs.")
+                self.outcome = (
+                    OUTCOME_FAILED if self._had_failures else OUTCOME_NO_RESULTS
+                )
+                if self._had_failures:
+                    self._log(
+                        "Archive discovery was incomplete; could not confirm whether "
+                        "the requested missing issues are available."
+                    )
+                else:
+                    self._log("Could not match any missing issues to archive URLs.")
                 self._log("Targets: " + ", ".join(f"{y}/{m}" for y, m in sorted(targets)))
                 sample_slugs = [url.rstrip("/").split("/")[-1] for url in links[:5]]
                 self._log("Sample URL slugs: " + ", ".join(sample_slugs))

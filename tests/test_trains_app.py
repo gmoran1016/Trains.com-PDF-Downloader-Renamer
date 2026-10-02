@@ -640,6 +640,96 @@ def test_download_worker_downloads_partial_results_and_continues_after_scan_fail
     assert worker.outcome == trains_app.OUTCOME_FAILED
 
 
+def test_missing_issues_worker_downloads_partial_matches_after_scan_failure(
+    monkeypatch, tmp_path
+):
+    import trains_app
+
+    issue_url = "https://www.trains.com/mrr/magazine/november-2026/"
+    downloaded = []
+
+    class PartialFailureDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self.download_dir = download_dir
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            raise trains_app.ArchiveScanError(
+                "HTTP 403 while reading page 2", partial_links=[issue_url]
+            )
+
+        def download_issue(self, url, **_kwargs):
+            downloaded.append(url)
+            return True, "MRR-11-November-2026.pdf"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", PartialFailureDownloader)
+    monkeypatch.setattr(trains_app, "PROGRESS_FILE", str(tmp_path / "progress.json"))
+    monkeypatch.setattr(
+        trains_app, "SPECIAL_ISSUES_FILE", str(tmp_path / "special-issues.json")
+    )
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    worker = trains_app.MissingIssuesWorker(
+        "MRR",
+        trains_app.MAGAZINES["Model Railroader"]["url"],
+        {"2026": ["November"]},
+        str(tmp_path),
+        None,
+        False,
+    )
+    worker.run()
+
+    assert downloaded == [issue_url]
+    assert worker.outcome == trains_app.OUTCOME_FAILED
+
+
+def test_missing_issues_worker_does_not_report_no_results_for_incomplete_scan(
+    monkeypatch, tmp_path
+):
+    import trains_app
+
+    partial_issue = "https://www.trains.com/mrr/magazine/november-2026/"
+
+    class PartialFailureDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self.download_dir = download_dir
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            raise trains_app.ArchiveScanError(
+                "HTTP 403 while reading page 2", partial_links=[partial_issue]
+            )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", PartialFailureDownloader)
+    monkeypatch.setattr(trains_app, "PROGRESS_FILE", str(tmp_path / "progress.json"))
+    monkeypatch.setattr(
+        trains_app, "SPECIAL_ISSUES_FILE", str(tmp_path / "special-issues.json")
+    )
+
+    worker = trains_app.MissingIssuesWorker(
+        "MRR",
+        trains_app.MAGAZINES["Model Railroader"]["url"],
+        {"2026": ["December"]},
+        str(tmp_path),
+        None,
+        False,
+    )
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_FAILED
+    assert worker._had_failures is True
+
+
 def test_download_worker_stop_is_cancelled_not_success(monkeypatch, tmp_path):
     import trains_app
 
