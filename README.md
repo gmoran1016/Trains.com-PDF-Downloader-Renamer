@@ -1,6 +1,6 @@
-# Trains.com Magazine Downloader & Organizer
+# Trains.com Magazine & Track Plan Downloader
 
-**v1.8.6** — An all-in-one desktop application for downloading and organizing PDF issues of trains.com magazines. Supports all five publications, resumes interrupted downloads, and includes a built-in PDF organizer.
+**v1.9.0** — A desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer.
 
 ## Download
 
@@ -32,17 +32,18 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 ## Features
 
-- **Workstation UI** — separate Download and Organize workflows with readable magazine rows, shared archive access, and a resizable activity drawer
+- **Workstation UI** — separate Download, Track Plans, and Organize workflows with readable magazine rows, shared archive access, and a resizable activity drawer
+- **Track Plan Database download** — a separate workflow scans the paginated [Model Railroader Track Plan Database](https://www.trains.com/mrr/how-to/track-plan-database/) and downloads each plan PDF under its original filename to an independent folder; existing downloads are skipped on later runs
 - **Visible organizer results** — moved, existing, unrecognized, corrupt, conflict, metadata, and missing-issue counts are shown in the workspace
 - **All three download modes** handled automatically:
   - Recent issues via direct PDF link (downloaded in parallel — up to 3 at once)
   - Mid-era issues via the embedded flipbook reader
   - Very old digitised-only issues skipped gracefully
 - **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
-- **Cookie-based authentication** — log in once and sessions are reused across runs
+- **Cookie-based authentication** — log in once and reuse the shared session for magazine and track plan downloads
 - **Authenticated HTTP fallback** — if ChromeDriver receives Trains.com's anti-bot 403 page, saved authenticated cookies are used for archive discovery and direct PDF downloads
 - **Truthful archive discovery** — temporary request failures are retried; a blocked or interrupted archive scan is reported as a failure, preserves issues already found, and never appears as a complete or empty scan
-- **Settings persistence** — save location, cookies path, headless mode, sort order, and magazine selections are remembered between sessions
+- **Settings persistence** — magazine and track plan folders, cookie path, headless mode, sort order, and magazine selections are remembered between sessions
 - **Per-magazine progress rows** — the resizable activity drawer shows each magazine's download progress with an ETA estimate
 - **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel
 - **Built-in PDF organizer** — renames and sorts PDFs into `YYYY/` subfolders with consistent naming (`MRR-01-January-2024.pdf`)
@@ -60,7 +61,9 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 
 ## Authentication
 
-A trains.com subscription is required. On first run, leave the cookie file field set to `session_cookies.json`, leave **Hide download browser** unchecked, and click **Start download**. Chrome will open for you to log in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
+A trains.com subscription is required. On first use, open **Account settings** and leave the cookie file path set to `session_cookies.json`. In **Magazines**, leave **Keep browser hidden** unchecked, select the publications, and click **Download selected magazines**. Chrome opens for you to sign in manually. Credentials are never stored; only the JSON session cookie is saved for reuse. Treat that file as sensitive and do not share it.
+
+The Track Plans workflow uses the same cookie file and sign-in process. If the saved session is no longer valid, its browser opens for sign-in and saves refreshed cookies for both download workflows.
 
 The app avoids a ChromeDriver 154 crash on Windows by disabling automatic attachment to embedded frames. Frames still display normally and accept manual input; the downloader automates the main page. A driver crash can leave Chrome open even though the downloader has lost its connection.
 
@@ -98,7 +101,7 @@ The **Organize** tab can also rename and sort any existing folder of PDFs indepe
 
 ## Running from Source
 
-Requires Python 3.10+ and Google Chrome.
+The desktop interface is written in Rust and the existing Python engine runs as a bundled worker. Published applications do not require a Python installation. Building from source requires Rust stable, Python 3.11+, and Google Chrome for download jobs.
 
 ```bash
 git clone https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer.git
@@ -110,9 +113,10 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install -r requirements.txt
-python trains_app.py
+pip install -r requirements-dev.txt pyinstaller
 ```
+
+On Windows, run `build.bat` to package the Rust desktop application with its Python worker. The builder uses fresh run-specific output folders and preserves existing `build/` and `dist/` contents. For Linux and macOS releases, use the cross-platform GitHub Actions workflow.
 
 ### Running the tests
 
@@ -125,19 +129,15 @@ The development requirements include both the application dependencies and pytes
 
 ### Building the exe locally (Windows)
 
-```bash
+```bat
 build.bat
 ```
 
-Output: `dist\TrainsDownloader.exe`
-
----
-
-`build.bat` runs the test suite before building and recreates the `build/` and `dist/` directories. Keep runtime files such as cookies, settings, and downloaded magazines outside `dist/`.
+Output: a run-specific folder under `dist\rust-ui-*\TrainsDownloader-windows.exe`.
 
 ### GitHub Actions
 
-Every push to `main` runs [`.github/workflows/build.yml`](.github/workflows/build.yml). The workflow runs the full pytest suite on Windows, Linux, and macOS, builds one-file windowed PyInstaller executables, and publishes all three platform assets to the release matching `APP_VERSION`:
+Every push to `main` runs [`.github/workflows/build.yml`](.github/workflows/build.yml). The workflow runs the Python engine and worker tests, Rust UI tests, formatting, and lint checks on Windows, Linux, and macOS. It packages the Python worker into the Rust desktop executable and publishes all three platform assets to the release matching the shared app version:
 
 | Platform | GitHub Release asset |
 |----------|----------------------|
@@ -145,22 +145,26 @@ Every push to `main` runs [`.github/workflows/build.yml`](.github/workflows/buil
 | Linux    | `TrainsDownloader-linux` |
 | macOS    | `TrainsDownloader-macos` |
 
-The workflow is also available through **Actions → Build Executables → Run workflow**. A successful run should show three completed matrix jobs and a release containing all three assets. The local `build/`, `dist/`, generated PyInstaller spec, runtime state, and downloaded files are intentionally excluded from Git; use the release assets for distribution rather than committing a workstation build.
+The workflow is also available through **Actions → Build Desktop Applications → Run workflow**. A successful run should show three completed matrix jobs and a release containing all three assets. The local `build/`, `dist/`, generated PyInstaller spec, runtime state, and downloaded files are intentionally excluded from Git; use the release assets for distribution rather than committing a workstation build.
 
 ---
 
 ## Project Structure
 
 ```
-trains_app.py                  # entire application (GUI + downloader + organizer)
+rust-ui/                       # Rust/egui desktop application and worker protocol
+worker_main.py                 # bundled JSON-lines worker entry point
+worker_protocol.py             # versioned worker request/response schema
+trains_app.py                  # retained Python download, organizer, and PDF engine
 requirements.txt               # runtime pip dependencies
 requirements-dev.txt           # runtime dependencies plus pytest
 build.bat                      # local Windows build script
 pytest.ini                     # pytest config
 tests/
-  test_trains_app.py           # unit tests for settings, PDF and organizer behavior
-  test_ui_smoke.py             # offscreen Qt construction/layout smoke tests
-  render_ui.py                 # native Windows screenshot harness for visual QA
+  test_trains_app.py           # Python engine tests
+  test_worker_protocol.py      # JSON-lines protocol validation
+  test_worker_integration.py   # worker adapter and subprocess tests
+rust-ui/tests/                 # Rust state, protocol, and desktop UI tests
 .github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push to main
 docs/superpowers/              # design specs and implementation plans
 docs/usability-audit-2026-08-08.md  # QA findings and remediation evidence

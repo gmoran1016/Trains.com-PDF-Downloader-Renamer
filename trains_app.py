@@ -15,6 +15,7 @@ import time
 import logging
 import random
 import datetime
+import threading
 from calendar import month_name, month_abbr as _month_abbr
 from pathlib import Path
 from functools import wraps
@@ -43,7 +44,11 @@ from PyQt5.QtCore import pyqtSignal, QObject, QThread, Qt
 # ------------------------------------------------------------------------------
 # Base directory — next to the .exe when frozen, next to the script otherwise
 # ------------------------------------------------------------------------------
-if getattr(sys, "frozen", False):
+_DATA_DIR_OVERRIDE = os.environ.get("TRAINS_DATA_DIR")
+if _DATA_DIR_OVERRIDE:
+    _BASE_DIR = os.path.abspath(os.path.expanduser(_DATA_DIR_OVERRIDE))
+    os.makedirs(_BASE_DIR, exist_ok=True)
+elif getattr(sys, "frozen", False):
     _BASE_DIR = os.path.dirname(sys.executable)
 else:
     _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -105,8 +110,12 @@ DEFAULT_COOKIES_FILE = os.path.join(_BASE_DIR, "session_cookies.json")
 PROGRESS_FILE       = os.path.join(_BASE_DIR, "download_progress.json")
 SPECIAL_ISSUES_FILE = os.path.join(_BASE_DIR, "special_issues.json")
 SETTINGS_FILE       = os.path.join(_BASE_DIR, "settings.json")
+TRACK_PLAN_DATABASE_URL = (
+    "https://www.trains.com/mrr/how-to/track-plan-database/"
+)
 DOWNLOAD_TIMEOUT = 120   # seconds to wait for a PDF download
 LOGIN_TIMEOUT = 300      # seconds to wait for manual login (5 min)
+TRACK_PLAN_REQUEST_DELAY = 0.35
 HTTP_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -131,6 +140,10 @@ class ArchiveScanError(RuntimeError):
 
 class ArchiveRedirectError(ArchiveScanError):
     """Raised when an archive request lands on an unrelated URL."""
+
+
+class TrackPlanAccessError(ArchiveScanError):
+    """Raised when a track plan page redirects to an access or login screen."""
 
 
 class _AnchorParser(HTMLParser):
@@ -167,6 +180,131 @@ def _extract_anchor_links(html: str, base_url: str) -> list[tuple[str, str]]:
         for href, text in parser.links
         if href and href.strip()
     ]
+
+
+def _extract_track_plan_listing(
+    html: str,
+    base_url: str = TRACK_PLAN_DATABASE_URL,
+) -> tuple[list[str], int]:
+    """Return unique track plan pages and the largest pagination number."""
+    base_path = urlsplit(TRACK_PLAN_DATABASE_URL).path.rstrip("/") + "/"
+    plan_urls: list[str] = []
+    max_page = 1
+
+    for href, _text in _extract_anchor_links(html, base_url):
+        parts = urlsplit(href)
+        if parts.netloc.lower() not in ("www.trains.com", "trains.com"):
+            continue
+        if not parts.path.startswith(base_path):
+            continue
+
+        suffix = parts.path[len(base_path):].strip("/")
+        if not suffix:
+            continue
+        segments = suffix.split("/")
+        if len(segments) == 2 and segments[0].lower() == "page" \
+                and segments[1].isdigit():
+            max_page = max(max_page, int(segments[1]))
+        elif len(segments) == 1 and segments[0].lower() not in {
+            "page", "tag", "category", "author",
+        }:
+            canonical = _canonical_url(href)
+            if canonical not in plan_urls:
+                plan_urls.append(canonical)
+
+    return plan_urls, max_page
+
+
+def _extract_track_plan_pdf_url(
+    html: str,
+    plan_url: str,
+) -> str | None:
+    """Find the PDF link belonging to an individual track plan page."""
+    pdf_links: list[tuple[str, str]] = []
+    for href, text in _extract_anchor_links(html, plan_url):
+        parts = urlsplit(href)
+        if parts.scheme.lower() != "https" \
+                or parts.netloc.lower() not in ("www.trains.com", "trains.com") \
+                or not parts.path.lower().endswith(".pdf"):
+            continue
+        candidate = (href, text.strip().lower())
+        if candidate not in pdf_links:
+            pdf_links.append(candidate)
+
+    track_plan_links = [
+        href for href, text in pdf_links
+        if "track plan" in text and "pdf" in text
+    ]
+    if len(track_plan_links) == 1:
+        return track_plan_links[0]
+    if not track_plan_links and len(pdf_links) == 1:
+        return pdf_links[0][0]
+    return None
+
+
+def _track_plan_pdf_filename(pdf_url: str) -> str:
+    from urllib.parse import unquote
+
+    filename = os.path.basename(unquote(urlsplit(pdf_url).path))
+    filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", filename).strip(" .")
+    if not filename:
+        filename = "track-plan.pdf"
+    if not filename.lower().endswith(".pdf"):
+        filename += ".pdf"
+    return filename
+
+
+def _download_track_plan_pdf(
+    session,
+    pdf_url: str,
+    destination_dir: str,
+    stop_requested,
+) -> tuple[bool, str]:
+    """Save a plan PDF under its original filename without magazine renaming."""
+    import tempfile
+    response = None
+    temporary_path = None
+    try:
+        response = session.get(
+            pdf_url,
+            stream=True,
+            timeout=DOWNLOAD_TIMEOUT,
+        )
+        response.raise_for_status()
+        filename = _track_plan_pdf_filename(pdf_url)
+
+        fd, temporary_path = tempfile.mkstemp(
+            prefix=".track-plan-",
+            suffix=".download",
+            dir=destination_dir,
+        )
+        with os.fdopen(fd, "wb") as output:
+            for chunk in response.iter_content(chunk_size=65536):
+                if stop_requested():
+                    return False, "cancelled"
+                if chunk:
+                    output.write(chunk)
+
+        if not _verify_pdf(temporary_path):
+            return False, f"Downloaded file is not a valid PDF: {filename}"
+
+        destination = _unique_path(os.path.join(destination_dir, filename))
+        os.replace(temporary_path, destination)
+        temporary_path = None
+        return True, destination
+    except Exception as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        if status_code in (401, 403):
+            return False, f"Access denied (HTTP {status_code}) while downloading PDF"
+        return False, f"PDF download failed: {exc}"
+    finally:
+        if response is not None:
+            response.close()
+        if temporary_path and os.path.exists(temporary_path):
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
 
 
 def _canonical_url(url: str) -> str:
@@ -544,7 +682,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.8.6"
+APP_VERSION = "1.9.0"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -924,10 +1062,13 @@ class OrganizeSummary:
     metadata_stamped: int = 0
     report: list[str] = field(default_factory=list)
     missing_by_prefix_year: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    scan_complete: bool = True
 
 
 def _missing_download_selection(summary: OrganizeSummary) -> tuple[str | None, dict[str, list[str]]]:
     """Return a safe missing-download target only for one observed publication."""
+    if not summary.scan_complete:
+        return None, {}
     if len(summary.missing_by_prefix_year) != 1:
         return None, {}
     prefix, by_year = next(iter(summary.missing_by_prefix_year.items()))
@@ -970,7 +1111,14 @@ def _detect_issue_frequency(issues_by_year: dict) -> list | None:
     return sorted(common, key=lambda m: MONTH_NUM_FROM_NAME[m])
 
 
-def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None, log_fn=None, progress_fn=None):
+def organize_pdfs(
+    source_dir: str,
+    dest_dir: str,
+    hint_prefix: str | None = None,
+    log_fn=None,
+    progress_fn=None,
+    cancel_event: threading.Event | None = None,
+):
     """
     Move and rename PDFs from source_dir into dest_dir/YYYY/ subfolders.
     Returns an OrganizeSummary describing moves, integrity checks, conflicts,
@@ -982,16 +1130,26 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
         if log_fn:
             log_fn(msg)
 
-    # Pre-collect all PDF paths so we can report total progress
+    summary = OrganizeSummary()
+
+    def _walk_error(error: OSError) -> None:
+        summary.scan_complete = False
+        _log(f"  [error] Could not scan a source folder: {error}")
+
+    # Pre-collect all PDF paths so we can report total progress. os.walk
+    # reports inaccessible directories through onerror; keep files already
+    # discovered, but mark the coverage incomplete for the final outcome.
     all_pdfs = []
-    for root, _, files in os.walk(source_dir):
+    for root, _, files in os.walk(source_dir, onerror=_walk_error):
+        if cancel_event is not None and cancel_event.is_set():
+            summary.scan_complete = False
+            break
         for fname in files:
             if fname.lower().endswith(".pdf"):
                 all_pdfs.append((root, fname))
     total_pdfs = len(all_pdfs)
 
     issues_by_prefix_year: dict[str, dict[str, set[str]]] = {}
-    summary = OrganizeSummary()
 
     def _record_issue(prefix: str, year: str, mname: str | None) -> None:
         months = issues_by_prefix_year.setdefault(prefix, {}).setdefault(year, set())
@@ -1003,56 +1161,77 @@ def organize_pdfs(source_dir: str, dest_dir: str, hint_prefix: str | None = None
             progress_fn(file_idx + 1, total_pdfs)
 
     for file_idx, (root, fname) in enumerate(all_pdfs):
+        if cancel_event is not None and cancel_event.is_set():
+            summary.scan_complete = False
+            _log("  Organizer stopped; keeping the partial summary.")
+            break
         fpath = os.path.join(root, fname)
-        parsed = parse_pdf_filename(fpath, hint_prefix)
-        if not parsed:
-            _log(f"  Skipping (unrecognized, no date found in filename or PDF content): {fname}")
-            summary.unrecognized += 1
-            _emit_progress(file_idx)
-            continue
-        new_stem, year, mname = parsed
-        prefix = new_stem.split("-", 1)[0].upper()
+        try:
+            parsed = parse_pdf_filename(fpath, hint_prefix)
+            if not parsed:
+                _log(f"  Skipping (unrecognized, no date found in filename or PDF content): {fname}")
+                summary.unrecognized += 1
+                continue
+            new_stem, year, mname = parsed
+            prefix = new_stem.split("-", 1)[0].upper()
 
-        if not _verify_pdf(fpath):
-            _log(f"  [corrupt] {fname} — left in place")
-            summary.corrupt += 1
-            _emit_progress(file_idx)
-            continue
+            if not _verify_pdf(fpath):
+                _log(f"  [corrupt] {fname} — left in place")
+                summary.corrupt += 1
+                continue
 
-        _record_issue(prefix, year, mname)
+            _record_issue(prefix, year, mname)
 
-        year_dir = os.path.join(dest_dir, year)
-        expected_path = os.path.join(year_dir, new_stem + ".pdf")
-        fname_stem = os.path.splitext(fname)[0]
-        actual_dir  = os.path.normcase(os.path.abspath(root))
-        expected_dir = os.path.normcase(os.path.abspath(year_dir))
-        is_duplicate_variant = (
-            actual_dir == expected_dir
-            and re.fullmatch(re.escape(new_stem) + r"-\d+", fname_stem, re.IGNORECASE)
-        )
-        if is_duplicate_variant or os.path.normcase(os.path.abspath(fpath)) == os.path.normcase(os.path.abspath(expected_path)):
-            if is_duplicate_variant and os.path.exists(expected_path):
+            year_dir = os.path.join(dest_dir, year)
+            expected_path = os.path.join(year_dir, new_stem + ".pdf")
+            fname_stem = os.path.splitext(fname)[0]
+            actual_dir = os.path.normcase(os.path.abspath(root))
+            expected_dir = os.path.normcase(os.path.abspath(year_dir))
+            is_duplicate_variant = (
+                actual_dir == expected_dir
+                and re.fullmatch(
+                    re.escape(new_stem) + r"-\d+", fname_stem, re.IGNORECASE
+                )
+            )
+            if (
+                is_duplicate_variant
+                or os.path.normcase(os.path.abspath(fpath))
+                == os.path.normcase(os.path.abspath(expected_path))
+            ):
+                if is_duplicate_variant and os.path.exists(expected_path):
+                    summary.conflicts += 1
+                    _log(
+                        f"  [conflict] {fname} — duplicate preserved alongside "
+                        f"{os.path.basename(expected_path)}"
+                    )
+                if _stamp_pdf_metadata(fpath, mname, year, warn_fn=_log):
+                    _log(f"  Metadata updated: {fname}")
+                    summary.metadata_stamped += 1
+                summary.already_correct += 1
+                continue
+            os.makedirs(year_dir, exist_ok=True)
+            has_conflict = os.path.exists(expected_path)
+            dest_path = _unique_path(expected_path)
+            if has_conflict:
                 summary.conflicts += 1
-                _log(f"  [conflict] {fname} — duplicate preserved alongside {os.path.basename(expected_path)}")
-            if _stamp_pdf_metadata(fpath, mname, year, warn_fn=_log):
-                _log(f"  Metadata updated: {fname}")
+                _log(
+                    f"  [conflict] {fname} — canonical issue exists; preserving as "
+                    f"{os.path.basename(dest_path)}"
+                )
+            shutil.move(fpath, dest_path)
+            if _stamp_pdf_metadata(dest_path, mname, year, warn_fn=_log):
                 summary.metadata_stamped += 1
-            summary.already_correct += 1
+            if not has_conflict:
+                _log(f"  {fname}  →  {dest_path}")
+            summary.moved += 1
+        except Exception as error:
+            summary.scan_complete = False
+            _log(f"  [error] Could not process {fname}: {error}")
+        finally:
             _emit_progress(file_idx)
-            continue
-        os.makedirs(year_dir, exist_ok=True)
-        has_conflict = os.path.exists(expected_path)
-        dest_path = _unique_path(expected_path)
-        if has_conflict:
-            summary.conflicts += 1
-            _log(f"  [conflict] {fname} — canonical issue exists; preserving as {os.path.basename(dest_path)}")
-        shutil.move(fpath, dest_path)
-        if _stamp_pdf_metadata(dest_path, mname, year, warn_fn=_log):
-            summary.metadata_stamped += 1
-        if not has_conflict:
-            _log(f"  {fname}  →  {dest_path}")
-        summary.moved += 1
-        _emit_progress(file_idx)
+
+    if cancel_event is not None and cancel_event.is_set():
+        summary.scan_complete = False
 
     # Determine expected months independently for each observed publication.
     today = datetime.date.today()
@@ -1482,7 +1661,12 @@ class MagazineDownloader:
             logger.error(f"Login check error: {e}")
             return False
 
-    def wait_for_manual_login(self, timeout: int = LOGIN_TIMEOUT, progress_fn=None) -> bool:
+    def wait_for_manual_login(
+        self,
+        timeout: int = LOGIN_TIMEOUT,
+        progress_fn=None,
+        stop_requested=None,
+    ) -> bool:
         """
         Open trains.com in the visible browser and poll until the user
         has successfully logged in (or timeout expires).
@@ -1499,6 +1683,8 @@ class MagazineDownloader:
             self._navigate("https://www.trains.com/")
             self._log("Please log in via the browser window. Waiting…")
             while time.monotonic() < deadline:
+                if stop_requested and stop_requested():
+                    return False
                 src = self._driver.page_source.lower()
                 if any(k in src for k in (
                     "log out", "logout", "sign out", "my account",
@@ -2044,7 +2230,12 @@ class DownloadWorker(QThread):
                 if not downloader.wait_for_manual_login(
                     timeout=LOGIN_TIMEOUT,
                     progress_fn=self.signals.status_msg.emit,
+                    stop_requested=lambda: self._stop,
                 ):
+                    if self._stop:
+                        self.outcome = OUTCOME_CANCELLED
+                        self._log("Magazine login stopped by user.")
+                        return
                     self.outcome = OUTCOME_FAILED
                     self.signals.error.emit("Login timed out. Please try again.")
                     return
@@ -2296,6 +2487,336 @@ class DownloadWorker(QThread):
             self.signals.finished.emit()
 
 
+class TrackPlanWorker(QThread):
+    """Downloads individual PDFs from the authenticated track plan database."""
+
+    def __init__(self, destination_dir: str, cookies_path: str | None):
+        super().__init__()
+        self.destination_dir = os.path.abspath(destination_dir)
+        self.cookies_path = cookies_path or DEFAULT_COOKIES_FILE
+        self.signals = WorkerSignals()
+        self._stop = False
+        self._had_failures = False
+        self.outcome = OUTCOME_IDLE
+
+    def stop(self):
+        self._stop = True
+
+    def _log(self, message: str):
+        logger.info(message)
+        self.signals.log.emit(message)
+
+    def _fetch_page(self, downloader, session, url: str) -> tuple[str, str]:
+        """Fetch an authenticated page, falling back to the signed-in browser."""
+        try:
+            with session.get(url, timeout=BROWSER_COMMAND_TIMEOUT) as response:
+                response.raise_for_status()
+                html = response.text
+                final_url = str(getattr(response, "url", url) or url)
+        except Exception as http_error:
+            self._log("Authenticated page request failed; retrying in the browser…")
+
+            def read_browser_page():
+                downloader._navigate(url)
+                time.sleep(1)
+                if downloader._is_browser_blocked_page(downloader._driver):
+                    raise TrackPlanAccessError(
+                        "Trains.com denied access to the track plan page. "
+                        "Refresh the shared cookies or check this account's access."
+                    )
+                return downloader._driver.page_source, downloader._driver.current_url
+
+            try:
+                html, final_url = downloader._run_browser_command(
+                    read_browser_page,
+                    description="Track plan page request",
+                )
+            except TrackPlanAccessError:
+                raise
+            except Exception as browser_error:
+                raise ArchiveScanError(
+                    f"Could not load {url}. HTTP request: {http_error}; "
+                    f"browser request: {browser_error}"
+                ) from browser_error
+
+        final_canonical = _canonical_url(final_url)
+        route = _canonical_url(TRACK_PLAN_DATABASE_URL)
+        if not final_canonical.startswith(route):
+            raise TrackPlanAccessError(
+                f"Trains.com redirected away from the track plan database: "
+                f"{final_url}"
+            )
+        expected = _canonical_url(url)
+        if final_canonical != expected:
+            raise ArchiveRedirectError(
+                f"Track plan request redirected to an unexpected page: "
+                f"{url} → {final_url}"
+            )
+        return html, final_url
+
+    def run(self):
+        downloader = None
+        session = None
+        authenticated = False
+        self.outcome = OUTCOME_RUNNING
+        self._had_failures = False
+        try:
+            os.makedirs(self.destination_dir, exist_ok=True)
+            self._log("Starting browser for the track plan database…")
+            downloader = MagazineDownloader(
+                download_dir=self.destination_dir,
+                headless=False,
+                log_fn=self.signals.log.emit,
+            )
+
+            logged_in = False
+            if self.cookies_path and os.path.exists(self.cookies_path):
+                cookies = load_cookies(self.cookies_path)
+                if cookies:
+                    downloader.add_cookies(cookies)
+                    logged_in = downloader.is_logged_in()
+                    if logged_in:
+                        self._log("Authenticated via the shared saved cookies.")
+                    else:
+                        self._log(
+                            "Saved cookies did not authenticate — need to log in manually."
+                        )
+
+            if not logged_in:
+                self._log(
+                    "Please log in via the browser window (you have 5 minutes)…"
+                )
+                if not downloader.wait_for_manual_login(
+                    timeout=LOGIN_TIMEOUT,
+                    progress_fn=self.signals.status_msg.emit,
+                    stop_requested=lambda: self._stop,
+                ):
+                    if self._stop:
+                        self.outcome = OUTCOME_CANCELLED
+                        self._log("Track plan login stopped by user.")
+                        return
+                    self.outcome = OUTCOME_FAILED
+                    self.signals.error.emit("Login timed out. Please try again.")
+                    return
+                if self.cookies_path:
+                    downloader.save_cookies(self.cookies_path)
+                    self._log(f"Cookies saved to {self.cookies_path}")
+            authenticated = True
+
+            import requests
+
+            session = requests.Session()
+            session.headers.update({
+                "User-Agent": HTTP_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/pdf,*/*",
+            })
+            session.cookies.update(downloader._cookie_dict())
+
+            plan_urls: list[str] = []
+            page_number = 1
+            max_page = 1
+            scan_complete = False
+            access_lost = False
+
+            while page_number <= max_page:
+                if self._stop:
+                    self.outcome = OUTCOME_CANCELLED
+                    self._log("Track plan scan stopped by user.")
+                    return
+
+                page_url = (
+                    TRACK_PLAN_DATABASE_URL
+                    if page_number == 1
+                    else f"{TRACK_PLAN_DATABASE_URL}page/{page_number}/"
+                )
+                self.signals.status_msg.emit(
+                    f"Scanning track plan page {page_number} of {max_page}…"
+                )
+                try:
+                    time.sleep(TRACK_PLAN_REQUEST_DELAY)
+                    html, _final_url = self._fetch_page(downloader, session, page_url)
+                    page_plans, discovered_max = _extract_track_plan_listing(
+                        html, page_url
+                    )
+                    if not page_plans:
+                        raise ArchiveScanError(
+                            f"Track plan database page {page_number} contained no plan links.",
+                            partial_links=plan_urls,
+                        )
+                    new_plans = [url for url in page_plans if url not in plan_urls]
+                    if not new_plans:
+                        raise ArchiveScanError(
+                            f"Track plan database page {page_number} repeated earlier links.",
+                            partial_links=plan_urls,
+                        )
+                    plan_urls.extend(new_plans)
+                    max_page = max(max_page, discovered_max)
+                    if max_page > 500:
+                        raise ArchiveScanError(
+                            f"Track plan pagination reported an unexpected limit of {max_page} pages.",
+                            partial_links=plan_urls,
+                        )
+                    self.signals.progress.emit(page_number, max_page)
+                    self._log(
+                        f"  Listing page {page_number}: {len(new_plans)} plans "
+                        f"({len(plan_urls)} total)."
+                    )
+                except TrackPlanAccessError as exc:
+                    self._had_failures = True
+                    access_lost = True
+                    self._log(f"Track plan access failed: {exc}")
+                    break
+                except Exception as exc:
+                    self._had_failures = True
+                    self._log(f"Track plan scan failed on page {page_number}: {exc}")
+                    break
+
+                page_number += 1
+                scan_complete = page_number > max_page
+
+            if self._stop:
+                self.outcome = OUTCOME_CANCELLED
+                self._log("Track plan scan stopped by user.")
+                return
+            if not plan_urls:
+                self.outcome = OUTCOME_FAILED if self._had_failures else OUTCOME_NO_RESULTS
+                if self.outcome == OUTCOME_NO_RESULTS:
+                    self._log("No track plans were found.")
+                return
+            if access_lost:
+                self._log(
+                    "The authenticated session stopped working during discovery. "
+                    "Refresh the shared cookies and start again."
+                )
+                self.outcome = OUTCOME_FAILED
+                return
+
+            self._log(
+                f"Found {len(plan_urls)} track plans across "
+                f"{page_number - 1} listing page(s)."
+            )
+            if not scan_complete:
+                self._log(
+                    "The database scan was incomplete; downloading plans already found."
+                )
+
+            progress = load_progress()
+            total = len(plan_urls)
+            done = 0
+            downloaded = 0
+            existing = 0
+
+            for index, plan_url in enumerate(plan_urls, 1):
+                if self._stop:
+                    break
+                slug = urlsplit(plan_url).path.rstrip("/").rsplit("/", 1)[-1]
+                label = slug.replace("-", " ")
+                self.signals.status_msg.emit(
+                    f"Checking plan {index} of {total}: {label}"
+                )
+                stop_for_access = False
+
+                try:
+                    time.sleep(TRACK_PLAN_REQUEST_DELAY)
+                    html, _final_url = self._fetch_page(
+                        downloader, session, plan_url
+                    )
+                    pdf_url = _extract_track_plan_pdf_url(html, plan_url)
+                    if not pdf_url:
+                        self._had_failures = True
+                        self._log(f"[error] No plan PDF link found: {plan_url}")
+                    else:
+                        scoped_key = progress_key(
+                            pdf_url, self.destination_dir, flat=True
+                        )
+                        filename = _track_plan_pdf_filename(pdf_url)
+                        expected_path = os.path.join(
+                            self.destination_dir, filename
+                        )
+                        if _is_progress_completed(
+                            progress, pdf_url, self.destination_dir, flat=True
+                        ):
+                            self._log(f"[skip] {filename}")
+                            existing += 1
+                        elif os.path.isfile(expected_path) and _verify_pdf(expected_path):
+                            self._log(f"[exists] {filename}")
+                            _record_progress_completion(
+                                progress, pdf_url, scoped_key
+                            )
+                            save_progress(progress)
+                            existing += 1
+                        else:
+                            time.sleep(TRACK_PLAN_REQUEST_DELAY)
+                            ok, result = _download_track_plan_pdf(
+                                session,
+                                pdf_url,
+                                self.destination_dir,
+                                lambda: self._stop,
+                            )
+                            if ok:
+                                self._log(f"  → {result}")
+                                _record_progress_completion(
+                                    progress, pdf_url, scoped_key
+                                )
+                                save_progress(progress)
+                                downloaded += 1
+                            elif result == "cancelled":
+                                self._stop = True
+                            else:
+                                self._had_failures = True
+                                self._log(f"[error] {filename}: {result}")
+                                if result.startswith("Access denied"):
+                                    stop_for_access = True
+                except TrackPlanAccessError as exc:
+                    self._had_failures = True
+                    self._log(f"[error] Track plan access stopped: {exc}")
+                    stop_for_access = True
+                except Exception as exc:
+                    self._had_failures = True
+                    self._log(f"[error] Could not process {plan_url}: {exc}")
+
+                if self._stop:
+                    break
+                done += 1
+                self.signals.progress.emit(done, total)
+                self.signals.status_msg.emit(f"Processed {done} of {total} plans")
+                if stop_for_access:
+                    self._log(
+                        "Trains.com denied access. Refresh the shared cookies or "
+                        "check this account's access before starting again."
+                    )
+                    break
+
+            if authenticated and self.cookies_path:
+                downloader.save_cookies(self.cookies_path)
+
+            if self._stop:
+                self.outcome = OUTCOME_CANCELLED
+                self._log("Track plan download stopped by user.")
+            elif self._had_failures or not scan_complete:
+                self.outcome = OUTCOME_FAILED
+                self._log(
+                    f"Track plan run finished with failures: {downloaded} downloaded, "
+                    f"{existing} already present or skipped."
+                )
+            else:
+                self.outcome = OUTCOME_SUCCESS
+                self._log(
+                    f"Track plan run complete: {downloaded} downloaded, "
+                    f"{existing} already present or skipped."
+                )
+        except Exception as exc:
+            self.outcome = OUTCOME_FAILED
+            logger.exception("Track plan worker error")
+            self.signals.error.emit(str(exc))
+        finally:
+            if session is not None:
+                session.close()
+            if downloader is not None:
+                downloader.close()
+            self.signals.finished.emit()
+
+
 class OrganizeWorker(QThread):
     """Runs organize_pdfs in a background thread."""
     def __init__(self, source_dir: str, dest_dir: str, hint_prefix: str | None):
@@ -2305,8 +2826,14 @@ class OrganizeWorker(QThread):
         self.hint_prefix = hint_prefix
         self.signals     = WorkerSignals()
         self.result      = None   # filled in by run()
+        self._cancel_event = threading.Event()
+        self.outcome = OUTCOME_IDLE
+
+    def stop(self):
+        self._cancel_event.set()
 
     def run(self):
+        self.outcome = OUTCOME_RUNNING
         try:
             self.result = organize_pdfs(
                 self.source_dir,
@@ -2314,10 +2841,31 @@ class OrganizeWorker(QThread):
                 hint_prefix=self.hint_prefix,
                 log_fn=self.signals.log.emit,
                 progress_fn=self.signals.progress.emit,
+                cancel_event=self._cancel_event,
             )
         except Exception as e:
+            self.outcome = OUTCOME_FAILED
+            logger.exception("Organizer worker error")
             self.signals.error.emit(str(e))
         finally:
+            if self.result is not None and self.outcome == OUTCOME_RUNNING:
+                if self._cancel_event.is_set():
+                    self.result.scan_complete = False
+                    self.outcome = OUTCOME_CANCELLED
+                elif not self.result.scan_complete:
+                    self.outcome = OUTCOME_FAILED
+                    self.signals.error.emit(
+                        "Organizer scan was incomplete; partial results were retained."
+                    )
+                elif not any((
+                    self.result.moved,
+                    self.result.already_correct,
+                    self.result.unrecognized,
+                    self.result.corrupt,
+                )):
+                    self.outcome = OUTCOME_NO_RESULTS
+                else:
+                    self.outcome = OUTCOME_SUCCESS
             self.signals.finished.emit()
 
 
@@ -2399,7 +2947,12 @@ class MissingIssuesWorker(QThread):
                 if not downloader.wait_for_manual_login(
                     timeout=LOGIN_TIMEOUT,
                     progress_fn=self.signals.status_msg.emit,
+                    stop_requested=lambda: self._stop,
                 ):
+                    if self._stop:
+                        self.outcome = OUTCOME_CANCELLED
+                        self._log("Missing-issue login stopped by user.")
+                        return
                     self.outcome = OUTCOME_FAILED
                     self.signals.error.emit("Login timed out. Please try again.")
                     return
@@ -2905,10 +3458,11 @@ QMessageBox QLabel { color: #17242B; }
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"Trains.com Magazine Downloader & Organizer v{APP_VERSION}")
+        self.setWindowTitle(f"Trains.com Downloader & Organizer v{APP_VERSION}")
         self.resize(1040, 760)
         self.setMinimumSize(800, 620)
         self.worker:           DownloadWorker | None      = None
+        self._track_plan_worker: TrackPlanWorker | None    = None
         self._org_worker:      OrganizeWorker | None      = None
         self._missing_worker:  MissingIssuesWorker | None = None
         self._org_hint:        str | None                 = None
@@ -3145,6 +3699,67 @@ class MainWindow(QMainWindow):
 
         return w
 
+    def _make_track_plans_panel(self) -> QWidget:
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 12)
+        layout.setSpacing(12)
+        layout.addWidget(self._make_page_heading(
+            "Download track plans",
+            "Download the available Model Railroader Track Plan Database PDFs. "
+            "A large collection can take a while; you can stop and resume later.",
+        ))
+
+        self.track_plans_folder_edit = QLineEdit(
+            str(Path.home() / "Downloads" / "TrainsTrackPlans")
+        )
+        self.track_plans_folder_edit.setAccessibleName("Track plans save folder")
+        folder_card = self._make_path_card(
+            "Track plans folder",
+            "PDFs are saved here with their original filenames, separate from magazines.",
+            self.track_plans_folder_edit,
+            lambda: self._pick_dir(self.track_plans_folder_edit),
+        )
+        self.track_plans_browse_btn = folder_card.findChild(QPushButton)
+        layout.addWidget(folder_card)
+
+        access_note = QLabel(
+            "Uses the shared trains.com cookie file above. If it needs a fresh sign-in, "
+            "the browser will open and save the updated cookies for both download tabs."
+        )
+        access_note.setProperty("role", "muted")
+        access_note.setWordWrap(True)
+        layout.addWidget(access_note)
+
+        self.track_plans_validation = QLabel("")
+        self.track_plans_validation.setProperty("role", "status")
+        self.track_plans_validation.setWordWrap(True)
+        layout.addWidget(self.track_plans_validation)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        self.track_plans_start_btn = QPushButton("Download all track plans")
+        self.track_plans_start_btn.setProperty("role", "primary")
+        self.track_plans_start_btn.setAccessibleName("Download all track plans")
+        self.track_plans_start_btn.clicked.connect(self._start_track_plan_download)
+        self.track_plans_stop_btn = QPushButton("Stop")
+        self.track_plans_stop_btn.setProperty("role", "danger")
+        self.track_plans_stop_btn.setAccessibleName("Stop track plan download")
+        self.track_plans_stop_btn.setEnabled(False)
+        self.track_plans_stop_btn.clicked.connect(self._stop_track_plan_download)
+        actions.addWidget(self.track_plans_start_btn, 2)
+        actions.addWidget(self.track_plans_stop_btn, 1)
+        layout.addLayout(actions)
+        layout.addStretch()
+
+        self.track_plans_folder_edit.textChanged.connect(self._save_settings)
+        self._track_plans_config_controls = [
+            self.track_plans_folder_edit,
+            self.track_plans_browse_btn,
+            self.track_plans_start_btn,
+        ]
+        return content
+
     def _make_organize_panel(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -3252,8 +3867,10 @@ class MainWindow(QMainWindow):
 
         self._page_stack = QStackedWidget()
         self._download_page = self._make_download_page()
+        self._track_plans_page = self._make_track_plans_page()
         self._organize_page = self._make_organize_page()
         self._page_stack.addWidget(self._download_page)
+        self._page_stack.addWidget(self._track_plans_page)
         self._page_stack.addWidget(self._organize_page)
         workspace_layout.addWidget(self._page_stack, 1)
         body_widget = QWidget()
@@ -3287,7 +3904,7 @@ class MainWindow(QMainWindow):
         title_column.setSpacing(1)
         title = QLabel("Trains.com Archive")
         title.setProperty("role", "app-title")
-        subtitle = QLabel("Magazine downloader and PDF organizer")
+        subtitle = QLabel("Magazine and track plan downloader with PDF organizer")
         subtitle.setProperty("role", "app-subtitle")
         title_column.addWidget(title)
         title_column.addWidget(subtitle)
@@ -3317,9 +3934,11 @@ class MainWindow(QMainWindow):
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         self._download_nav_btn = QToolButton()
+        self._track_plans_nav_btn = QToolButton()
         self._organize_nav_btn = QToolButton()
         for button, text, name in (
             (self._download_nav_btn, "Download", "Download workflow"),
+            (self._track_plans_nav_btn, "Track Plans", "Track plan download workflow"),
             (self._organize_nav_btn, "Organize", "Organize workflow"),
         ):
             button.setObjectName("nav_button")
@@ -3330,6 +3949,9 @@ class MainWindow(QMainWindow):
             self._nav_group.addButton(button)
             layout.addWidget(button)
         self._download_nav_btn.clicked.connect(lambda: self._set_mode("download"))
+        self._track_plans_nav_btn.clicked.connect(
+            lambda: self._set_mode("track_plans")
+        )
         self._organize_nav_btn.clicked.connect(lambda: self._set_mode("organize"))
         # Compatibility aliases for integrations and older UI smoke checks.
         self._dl_mode_btn = self._download_nav_btn
@@ -3387,6 +4009,11 @@ class MainWindow(QMainWindow):
 
     def _make_download_page(self) -> QScrollArea:
         return self._wrap_page(self._make_download_panel(), "download_scroll")
+
+    def _make_track_plans_page(self) -> QScrollArea:
+        return self._wrap_page(
+            self._make_track_plans_panel(), "track_plans_scroll"
+        )
 
     def _make_organize_page(self) -> QScrollArea:
         return self._wrap_page(self._make_organize_panel(), "organize_scroll")
@@ -3446,10 +4073,11 @@ class MainWindow(QMainWindow):
         return panel
 
     def _set_mode(self, mode: str):
-        index = 0 if mode == "download" else 1
+        index = {"download": 0, "track_plans": 1, "organize": 2}.get(mode, 0)
         self._page_stack.setCurrentIndex(index)
         self._download_nav_btn.setChecked(index == 0)
-        self._organize_nav_btn.setChecked(index == 1)
+        self._track_plans_nav_btn.setChecked(index == 1)
+        self._organize_nav_btn.setChecked(index == 2)
         self._active_mode = mode
         scroll = self._page_stack.currentWidget()
         if isinstance(scroll, QScrollArea):
@@ -3489,6 +4117,7 @@ class MainWindow(QMainWindow):
     def _sync_busy_controls(self, busy: bool) -> None:
         for control in (
             *getattr(self, "_download_config_controls", []),
+            *getattr(self, "_track_plans_config_controls", []),
             *getattr(self, "_org_config_controls", []),
         ):
             control.setEnabled(not busy)
@@ -3712,6 +4341,7 @@ class MainWindow(QMainWindow):
             self.test_cb,
             self.headless_cb,
             self.sort_combo,
+            self._clear_btn,
         ]
         return content
 
@@ -3999,8 +4629,107 @@ class MainWindow(QMainWindow):
         self._update_error_badge()
         self._refresh_log()
 
+    def _start_track_plan_download(self):
+        if self._track_plan_worker is not None and self._track_plan_worker.isRunning():
+            return
+        active_workers = (
+            self.worker,
+            self._missing_worker,
+            self._org_worker,
+        )
+        if any(worker is not None and worker.isRunning() for worker in active_workers):
+            QMessageBox.information(
+                self,
+                "Task in progress",
+                "Wait for the current task to finish before starting a track plan download.",
+            )
+            return
+
+        destination_dir = self.track_plans_folder_edit.text().strip()
+        if not destination_dir:
+            self.track_plans_validation.setText("Choose a folder to continue.")
+            QMessageBox.warning(
+                self, "No folder", "Please choose a track plans folder."
+            )
+            return
+        self.track_plans_validation.clear()
+        cookies_path = self.cookie_edit.text().strip() or DEFAULT_COOKIES_FILE
+
+        self.track_plans_start_btn.setEnabled(False)
+        self.track_plans_stop_btn.setEnabled(True)
+        self.start_btn.setEnabled(False)
+        self.org_btn.setEnabled(False)
+        self.dl_missing_btn.setEnabled(False)
+        self._sync_busy_controls(True)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setMaximum(1)
+        self.progress_bar.setVisible(True)
+        self._set_job_state("running", "Track plan database")
+        self._tray.setToolTip("Trains Downloader — Track plans starting…")
+
+        self._disconnect_worker(self._track_plan_worker)
+        self._track_plan_worker = TrackPlanWorker(
+            destination_dir=destination_dir,
+            cookies_path=cookies_path,
+        )
+        self._track_plan_worker.signals.log.connect(self._log)
+        self._track_plan_worker.signals.progress.connect(
+            self._update_track_plan_progress
+        )
+        self._track_plan_worker.signals.status_msg.connect(self.status_label.setText)
+        self._track_plan_worker.signals.error.connect(self._on_error)
+        self._track_plan_worker.signals.finished.connect(
+            self._on_track_plans_finished
+        )
+        self._track_plan_worker.start()
+
+    def _stop_track_plan_download(self):
+        if self._track_plan_worker is not None and self._track_plan_worker.isRunning():
+            self._track_plan_worker.stop()
+            self._log("Track plan stop requested — finishing the current request…")
+            self._set_job_state("running", "Stop requested")
+        self.track_plans_stop_btn.setEnabled(False)
+
+    def _update_track_plan_progress(self, current: int, total: int):
+        if total > 0:
+            self.progress_bar.setMaximum(total)
+            self.progress_bar.setValue(current)
+            self._tray.setToolTip(
+                f"Trains Downloader — {current} / {total} track plans…"
+            )
+
+    def _on_track_plans_finished(self):
+        self.track_plans_start_btn.setEnabled(True)
+        self.track_plans_stop_btn.setEnabled(False)
+        self.start_btn.setEnabled(True)
+        self.org_btn.setEnabled(True)
+        has_missing = bool(self._missing_by_year) and self._org_prefix and \
+                      _archive_url_for_prefix(self._org_prefix) is not None
+        self.dl_missing_btn.setEnabled(has_missing)
+        self._sync_busy_controls(False)
+        self.progress_bar.setVisible(False)
+
+        outcome = getattr(self._track_plan_worker, "outcome", OUTCOME_FAILED)
+        label = {
+            OUTCOME_SUCCESS: "Track plans complete",
+            OUTCOME_CANCELLED: "Track plan download cancelled",
+            OUTCOME_NO_RESULTS: "No track plans found",
+            OUTCOME_FAILED: "Track plan download failed",
+        }.get(outcome, "Track plan download failed")
+        state = {
+            OUTCOME_SUCCESS: "success",
+            OUTCOME_CANCELLED: "cancelled",
+            OUTCOME_NO_RESULTS: "empty",
+            OUTCOME_FAILED: "failed",
+        }.get(outcome, "failed")
+        self._log(f"--- {label} ---")
+        self._set_job_state(state, label)
+        self._tray.setToolTip("Trains Downloader — Idle")
+
     def _start_download(self):
         if self.worker is not None and self.worker.isRunning():
+            return
+        if self._track_plan_worker is not None and self._track_plan_worker.isRunning():
             return
 
         magazines = [n for n, btn in self.mag_chips.items() if btn.isChecked()]
@@ -4108,6 +4837,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         running = (
             (self.worker is not None and self.worker.isRunning())
+            or (self._track_plan_worker is not None and self._track_plan_worker.isRunning())
             or (self._missing_worker is not None and self._missing_worker.isRunning())
         )
         if not running:
@@ -4125,7 +4855,7 @@ class MainWindow(QMainWindow):
         if clicked is minimize_btn:
             self.hide()
         elif clicked is stop_btn:
-            for w in (self.worker, self._missing_worker):
+            for w in (self.worker, self._track_plan_worker, self._missing_worker):
                 if w is not None and w.isRunning():
                     w.stop()
             QApplication.instance().quit()
@@ -4134,6 +4864,8 @@ class MainWindow(QMainWindow):
         s = load_settings()
         if "base_dir" in s:
             self.dir_edit.setText(s["base_dir"])
+        if "track_plans_dir" in s:
+            self.track_plans_folder_edit.setText(s["track_plans_dir"])
         if "cookies_path" in s:
             self.cookie_edit.setText(s["cookies_path"])
         if "headless" in s:
@@ -4162,6 +4894,7 @@ class MainWindow(QMainWindow):
     def _save_settings(self):
         save_settings({
             "base_dir":           self.dir_edit.text(),
+            "track_plans_dir":    self.track_plans_folder_edit.text(),
             "cookies_path":       self.cookie_edit.text(),
             "headless":           self.headless_cb.isChecked(),
             "test_mode":          self.test_cb.isChecked(),
@@ -4176,6 +4909,8 @@ class MainWindow(QMainWindow):
 
     def _run_organize(self):
         if self._org_worker is not None and self._org_worker.isRunning():
+            return
+        if self._track_plan_worker is not None and self._track_plan_worker.isRunning():
             return
 
         src = self.src_edit.text().strip()
@@ -4250,6 +4985,8 @@ class MainWindow(QMainWindow):
 
     def _start_missing_download(self):
         if self._missing_worker is not None and self._missing_worker.isRunning():
+            return
+        if self._track_plan_worker is not None and self._track_plan_worker.isRunning():
             return
 
         dst = self.dst_edit.text().strip()

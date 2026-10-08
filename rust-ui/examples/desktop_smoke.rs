@@ -1,0 +1,117 @@
+use std::path::Path;
+
+use eframe::egui;
+use trains_com_downloader::{app::TrainsApp, model::AppPage, worker::FakeWorkerLauncher};
+
+fn parse_dimension(value: Option<String>, fallback: f32, minimum: f32) -> f32 {
+    value
+        .and_then(|value| value.parse().ok())
+        .filter(|value: &f32| *value >= minimum)
+        .unwrap_or(fallback)
+}
+
+fn dimension(name: &str, fallback: f32, minimum: f32) -> f32 {
+    parse_dimension(std::env::var(name).ok(), fallback, minimum)
+}
+
+fn requested_page() -> Option<AppPage> {
+    match std::env::var("TRAINS_UI_SMOKE_PAGE").ok()?.as_str() {
+        "magazines" => Some(AppPage::Magazines),
+        "track-plans" => Some(AppPage::TrackPlans),
+        "organize" => Some(AppPage::Organize),
+        _ => None,
+    }
+}
+
+fn configure_isolated_paths(app: &mut TrainsApp, root: &Path) {
+    let settings = app.settings_mut();
+    settings.base_dir = root.join("magazines").to_string_lossy().into_owned();
+    settings.track_plans_dir = root.join("track-plans").to_string_lossy().into_owned();
+    settings.cookies_path = root
+        .join("session_cookies.json")
+        .to_string_lossy()
+        .into_owned();
+    settings.org_src = root.join("organize-source").to_string_lossy().into_owned();
+    settings.org_dst = root
+        .join("organize-destination")
+        .to_string_lossy()
+        .into_owned();
+}
+
+fn main() -> eframe::Result<()> {
+    let data_dir = tempfile::tempdir().expect("create isolated smoke-test data root");
+    let data_root = data_dir.path().to_path_buf();
+    let page = requested_page();
+
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([
+                dimension("TRAINS_UI_SMOKE_WIDTH", 1120.0, 800.0),
+                dimension("TRAINS_UI_SMOKE_HEIGHT", 760.0, 620.0),
+            ])
+            .with_min_inner_size([800.0, 620.0]),
+        ..Default::default()
+    };
+
+    let result = eframe::run_native(
+        "Trains.com Archive — Desktop Smoke",
+        options,
+        Box::new(move |creation_context| {
+            let mut app = TrainsApp::new(data_root.clone(), Box::new(FakeWorkerLauncher));
+            configure_isolated_paths(&mut app, &data_root);
+            if let Some(page) = page {
+                app.set_active_page(page);
+            }
+            app.install_desktop_tray(creation_context.egui_ctx.clone());
+            Ok(Box::new(app))
+        }),
+    );
+    drop(data_dir);
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use trains_com_downloader::{app::TrainsApp, worker::UnavailableWorker};
+
+    use super::{configure_isolated_paths, parse_dimension};
+
+    #[test]
+    fn desktop_smoke_targets_are_confined_to_the_temporary_root() {
+        let temp = tempfile::tempdir().expect("temporary smoke-test data root");
+        let root = temp.path().to_path_buf();
+        let mut app = TrainsApp::new(root.clone(), Box::new(UnavailableWorker));
+
+        configure_isolated_paths(&mut app, &root);
+
+        let settings = app.settings();
+        for path in [
+            &settings.base_dir,
+            &settings.track_plans_dir,
+            &settings.cookies_path,
+            &settings.org_src,
+            &settings.org_dst,
+        ] {
+            assert!(
+                PathBuf::from(path).starts_with(&root),
+                "smoke path escaped the temporary root: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn smoke_viewport_accepts_approved_compact_height() {
+        assert_eq!(parse_dimension(Some("620".to_owned()), 760.0, 620.0), 620.0);
+    }
+
+    #[test]
+    fn smoke_viewport_rejects_dimensions_below_each_axis_minimum() {
+        assert_eq!(
+            parse_dimension(Some("799".to_owned()), 1120.0, 800.0),
+            1120.0
+        );
+        assert_eq!(parse_dimension(Some("619".to_owned()), 760.0, 620.0), 760.0);
+    }
+}

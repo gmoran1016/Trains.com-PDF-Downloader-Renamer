@@ -173,6 +173,117 @@ def test_organize_pdfs_reports_completeness_per_publication(tmp_path):
     ]
 
 
+def test_organize_stops_between_files_with_partial_summary(tmp_path, monkeypatch):
+    import threading
+    import trains_app
+
+    src = tmp_path / "incoming"
+    dst = tmp_path / "library"
+    src.mkdir()
+    dst.mkdir()
+    (src / "MRR-2024-01.pdf").write_bytes(b"first")
+    (src / "MRR-2024-02.pdf").write_bytes(b"second")
+    cancel_event = threading.Event()
+    monkeypatch.setattr(trains_app, "_verify_pdf", lambda _path: True)
+    monkeypatch.setattr(
+        trains_app, "_stamp_pdf_metadata", lambda *_args, **_kwargs: False
+    )
+
+    def cancel_after_first(done, _total):
+        if done == 1:
+            cancel_event.set()
+
+    summary = trains_app.organize_pdfs(
+        str(src), str(dst),
+        progress_fn=cancel_after_first,
+        cancel_event=cancel_event,
+    )
+
+    assert summary.scan_complete is False
+    assert summary.moved == 1
+    assert len(list(dst.rglob("*.pdf"))) == 1
+    assert len(list(src.glob("*.pdf"))) == 1
+    assert trains_app._missing_download_selection(summary) == (None, {})
+
+
+def test_organize_worker_stop_is_cancelled_with_partial_summary(tmp_path, monkeypatch):
+    import trains_app
+
+    src = tmp_path / "incoming"
+    dst = tmp_path / "library"
+    src.mkdir()
+    dst.mkdir()
+    (src / "MRR-2024-01.pdf").write_bytes(b"first")
+    (src / "MRR-2024-02.pdf").write_bytes(b"second")
+    monkeypatch.setattr(trains_app, "_verify_pdf", lambda _path: True)
+    monkeypatch.setattr(
+        trains_app, "_stamp_pdf_metadata", lambda *_args, **_kwargs: False
+    )
+    worker = trains_app.OrganizeWorker(str(src), str(dst), "MRR")
+
+    def stop_after_first(done, _total):
+        if done == 1:
+            worker.stop()
+
+    worker.signals.progress.connect(stop_after_first)
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_CANCELLED
+    assert worker.result.scan_complete is False
+    assert worker.result.moved == 1
+
+
+def test_failed_scan_retains_partial_matches_and_failed_outcome(tmp_path, monkeypatch):
+    import trains_app
+
+    src = tmp_path / "incoming"
+    dst = tmp_path / "library"
+    src.mkdir()
+    dst.mkdir()
+    (src / "MRR-2024-01.pdf").write_bytes(b"first")
+    monkeypatch.setattr(trains_app, "_verify_pdf", lambda _path: True)
+    monkeypatch.setattr(
+        trains_app, "_stamp_pdf_metadata", lambda *_args, **_kwargs: False
+    )
+
+    def incomplete_walk(top, onerror=None):
+        yield str(top), [], ["MRR-2024-01.pdf"]
+        if onerror is not None:
+            onerror(PermissionError("one subfolder could not be scanned"))
+
+    monkeypatch.setattr(trains_app.os, "walk", incomplete_walk)
+    worker = trains_app.OrganizeWorker(str(src), str(dst), "MRR")
+    errors = []
+    worker.signals.error.connect(errors.append)
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_FAILED
+    assert worker.result.scan_complete is False
+    assert worker.result.moved == 1
+    assert "MRR" in worker.result.missing_by_prefix_year
+    assert trains_app._missing_download_selection(worker.result) == (None, {})
+    assert errors == [
+        "Organizer scan was incomplete; partial results were retained."
+    ]
+
+
+def test_no_results_is_not_failure(tmp_path):
+    import trains_app
+
+    src = tmp_path / "incoming"
+    dst = tmp_path / "library"
+    src.mkdir()
+    dst.mkdir()
+    worker = trains_app.OrganizeWorker(str(src), str(dst), None)
+
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_NO_RESULTS
+    assert worker.result is not None
+    assert worker.result.moved == 0
+    assert worker.result.scan_complete is True
+
+
 def test_missing_download_selection_requires_one_publication():
     from trains_app import OrganizeSummary, _missing_download_selection
 
@@ -755,6 +866,49 @@ def test_download_worker_stop_is_cancelled_not_success(monkeypatch, tmp_path):
 
     worker.run()
 
+    assert worker.outcome == trains_app.OUTCOME_CANCELLED
+
+
+@pytest.mark.parametrize("job_kind", ["magazines", "download-missing"])
+def test_manual_login_wait_honors_stop_for_magazines_and_missing_jobs(
+    monkeypatch, tmp_path, job_kind
+):
+    import trains_app
+
+    observed_stop = []
+
+    class UnauthenticatedDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self._driver = None
+
+        def wait_for_manual_login(self, **kwargs):
+            stop_requested = kwargs.get("stop_requested")
+            observed_stop.append(bool(stop_requested and stop_requested()))
+            return False
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(trains_app, "MagazineDownloader", UnauthenticatedDownloader)
+    if job_kind == "magazines":
+        worker = trains_app.DownloadWorker(
+            ["Model Railroader"], str(tmp_path), False, False, None, True,
+            include_specials=False,
+        )
+    else:
+        worker = trains_app.MissingIssuesWorker(
+            "MRR",
+            trains_app.MAGAZINES["Model Railroader"]["url"],
+            {"2024": ["March"]},
+            str(tmp_path),
+            None,
+            False,
+        )
+
+    worker.stop()
+    worker.run()
+
+    assert observed_stop == [True]
     assert worker.outcome == trains_app.OUTCOME_CANCELLED
 
 

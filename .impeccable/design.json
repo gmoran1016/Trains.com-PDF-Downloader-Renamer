@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "mode": "operate",
+  "direction": {
+    "name": "Annual Index",
+    "seed": "ee530b99",
+    "thesis": "A clear annual index is the visual language for a tool that retrieves and keeps a trustworthy local archive.",
+    "reference": "Trains.com Model Railroader annual index",
+    "principles": [
+      "Keep Magazines, Track Plans, and Organize equal in navigation and visual weight.",
+      "Use issue and year labels only when supported by actual worker results.",
+      "Use clear native desktop controls rather than paper replicas or decorative dashboard charts."
+    ]
+  },
+  "platform": {
+    "impeccableTag": "adaptive",
+    "surface": "native desktop",
+    "operatingSystems": ["Windows", "Linux", "macOS"],
+    "framework": "Rust / egui / eframe",
+    "note": "The schema has no desktop-native value; adaptive is used for cross-platform classification."
+  },
+  "colors": {
+    "navy": "#1E385B",
+    "deepNavy": "#172C48",
+    "blue": "#2C5B8B",
+    "ink": "#1D2B3A",
+    "muted": "#5C6D7E",
+    "canvas": "#EFF4F7",
+    "surface": "#FFFFFF",
+    "indexYellow": "#FFCD40",
+    "line": "#D5DEE5",
+    "success": "#2D7E58",
+    "warning": "#9B5B10",
+    "warningSurface": "#FFF6E1",
+    "failure": "#AF423F",
+    "primaryActionText": "#FFFFFF",
+    "hoverSurface": "#E7EFF4",
+    "activeSurface": "#DEE9F1",
+    "selectedPublication": "#FFFCF1",
+    "selectedNavigation": "#FFFAE6"
+  },
+  "typography": {
+    "family": "egui proportional sans-serif; bundled Ubuntu Light in epaint 0.36.2 defaults",
+    "windowTitlePx": 20,
+    "workAreaHeadingPx": 28,
+    "perOsSystemFont": false,
+    "tabularNumerals": false,
+    "numericAlignment": "aligned rows and grid columns"
+  },
+  "layout": {
+    "minimumClientPx": [800, 620],
+    "wideViewportPx": [1440, 900],
+    "compactViewportPx": [800, 620],
+    "compactBreakpointWidthPx": 1000,
+    "navigationRailWidePx": 208,
+    "navigationRailCompactPx": 156,
+    "headerHeightPx": 64,
+    "workflowActionHeightPx": 64,
+    "contentMaxWidthPx": 980,
+    "activity": {
+      "defaultHeightPx": 190,
+      "minimumExpandedHeightPx": 112,
+      "maximumExpandedHeightPx": 340,
+      "collapsedHeightPx": 48
+    },
+    "spacing": {
+      "itemHorizontalPx": 10,
+      "itemVerticalPx": 9,
+      "buttonPaddingPx": [13, 8]
+    }
+  },
+  "jobStates": ["idle", "running", "success", "no-results", "failed", "cancelled"],
+  "verification": {
+    "screenshots": [
+      {
+        "path": ".impeccable/review/desktop-wide-1440x900.png",
+        "clientAreaPx": [1440, 900],
+        "capturedBeforeFinalContrastAdjustment": true
+      },
+      {
+        "path": ".impeccable/review/desktop-compact-800x620.png",
+        "clientAreaPx": [800, 620],
+        "capturedBeforeFinalContrastAdjustment": true
+      }
+    ],
+    "nativeUiAutomation": "not run; Windows Defender blocked the UIA harness",
+    "webDetector": "not run; the native Rust UI has no HTML/CSS surface"
+  }
+}

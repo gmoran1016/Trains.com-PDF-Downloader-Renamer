@@ -42,6 +42,7 @@ htmlcov/
 # PyInstaller and local packaging output
 build/
 dist/
+/rust-ui/target/
 # The project builds from command-line PyInstaller options; any generated spec is local only.
 *.spec
 TrainsDownloader-*.exe

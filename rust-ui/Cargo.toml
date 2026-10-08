@@ -1,0 +1,44 @@
+[package]
+name = "trains-com-downloader"
+version = "1.9.0"
+edition = "2024"
+rust-version = "1.95"
+
+[lib]
+name = "trains_com_downloader"
+path = "src/lib.rs"
+
+[features]
+default = []
+desktop-smoke = []
+test-worker = []
+
+[dependencies]
+eframe = "=0.36.2"
+rfd = "=0.17.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tray-icon = { version = "=0.26.0", default-features = false, features = ["ksni"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "=5.19.0", default-features = false, features = ["blocking-api"] }
+
+[dev-dependencies]
+egui_kittest = { version = "=0.36.2", features = ["eframe"] }
+
+[[example]]
+name = "desktop_smoke"
+path = "examples/desktop_smoke.rs"
+required-features = ["desktop-smoke"]
+
+[[bin]]
+name = "fake_worker"
+path = "tests/fixtures/fake_worker.rs"
+required-features = ["test-worker"]
+test = false
+
+[[test]]
+name = "worker_tests"
+path = "tests/worker_tests.rs"
+required-features = ["test-worker"]
