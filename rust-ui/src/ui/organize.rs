@@ -86,12 +86,6 @@ fn selected_missing_target(summary: &Value) -> Option<(&'static str, &'static st
 
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
     ui.add_space(20.0);
-    ui.label(
-        RichText::new("LOCAL ARCHIVE")
-            .small()
-            .strong()
-            .color(theme::BLUE),
-    );
     ui.heading(RichText::new("PDF organizer").size(28.0));
     ui.label("Sort PDFs into the archive, review coverage, and find missing issues.");
     ui.add_space(14.0);

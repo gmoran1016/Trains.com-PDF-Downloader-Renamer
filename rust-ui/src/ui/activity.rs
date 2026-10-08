@@ -6,9 +6,19 @@ use crate::{
     theme,
 };
 
+const MIN_EXPANDED_HEIGHT: f32 = 112.0;
+const MAX_EXPANDED_HEIGHT: f32 = 340.0;
+const MIN_WORK_AREA_HEIGHT: f32 = 208.0;
+const FIXED_SHELL_HEIGHT: f32 = 128.0;
+
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let collapsed = app.settings().activity_collapsed;
-    let expanded_height = app.settings().activity_height.clamp(112.0, 340.0);
+    let max_expanded_height = (ui.available_height() - FIXED_SHELL_HEIGHT - MIN_WORK_AREA_HEIGHT)
+        .clamp(MIN_EXPANDED_HEIGHT, MAX_EXPANDED_HEIGHT);
+    let expanded_height = app
+        .settings()
+        .activity_height
+        .clamp(MIN_EXPANDED_HEIGHT, max_expanded_height);
     let frame = Frame::new()
         .fill(theme::SURFACE)
         .stroke(Stroke::new(1.0, theme::LINE))
@@ -38,7 +48,7 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                     .on_hover_cursor(egui::CursorIcon::ResizeVertical);
                 if handle.dragged() {
                     let next_height = (app.settings().activity_height - handle.drag_delta().y)
-                        .clamp(112.0, 340.0);
+                        .clamp(MIN_EXPANDED_HEIGHT, max_expanded_height);
                     app.record_activity_height(next_height);
                 }
                 let toggle = activity_header(app, ui, false);
@@ -70,27 +80,27 @@ fn activity_header(app: &mut TrainsApp, ui: &mut egui::Ui, collapsed: bool) -> O
         ui.label(RichText::new("Activity").strong().color(theme::NAVY));
         state_marker(ui, app.job_state().outcome);
         ui.label(RichText::new(app.job_state().outcome.label()).strong());
+        if app.job_state().outcome == JobOutcome::Running {
+            let label = if app.job_state().stop_requested {
+                "Stop requested"
+            } else {
+                "Stop job"
+            };
+            if ui
+                .add_enabled(
+                    !app.job_state().stop_requested,
+                    Button::new(label).stroke(Stroke::new(1.0, theme::FAILURE)),
+                )
+                .clicked()
+            {
+                app.request_stop();
+            }
+        }
         if !collapsed {
             ui.separator();
-            ui.label(RichText::new(&app.job_state().message).color(theme::MUTED));
-        }
-        if app.job_state().outcome == JobOutcome::Running {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let label = if app.job_state().stop_requested {
-                    "Stop requested"
-                } else {
-                    "Stop job"
-                };
-                if ui
-                    .add_enabled(
-                        !app.job_state().stop_requested,
-                        Button::new(label).stroke(Stroke::new(1.0, theme::FAILURE)),
-                    )
-                    .clicked()
-                {
-                    app.request_stop();
-                }
-            });
+            let message = app.job_state().message.clone();
+            ui.add(egui::Label::new(RichText::new(&message).color(theme::MUTED)).truncate())
+                .on_hover_text(message);
         }
     });
     next_state

@@ -12,6 +12,8 @@ use std::{
     thread,
 };
 
+use eframe::egui;
+
 #[cfg(feature = "desktop-smoke")]
 use std::time::Duration;
 
@@ -73,6 +75,15 @@ pub trait WorkerLauncher: Send + Sync {
     ) -> Result<WorkerHandle, WorkerError> {
         Err(WorkerError::Unavailable)
     }
+
+    fn start_with_repaint(
+        &self,
+        request: WorkerRequest,
+        data_dir: PathBuf,
+        _context: egui::Context,
+    ) -> Result<WorkerHandle, WorkerError> {
+        self.start(request, data_dir)
+    }
 }
 
 pub struct UnavailableWorker;
@@ -83,6 +94,7 @@ impl WorkerLauncher for UnavailableWorker {}
 pub struct CommandWorkerLauncher {
     program: PathBuf,
     args: Vec<OsString>,
+    repaint_context: Option<egui::Context>,
 }
 
 impl CommandWorkerLauncher {
@@ -94,6 +106,7 @@ impl CommandWorkerLauncher {
         Self {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
+            repaint_context: None,
         }
     }
 }
@@ -138,13 +151,16 @@ impl WorkerLauncher for CommandWorkerLauncher {
         let (writer_tx, writer_rx) = mpsc::channel();
         let job_id = request.job_id.clone();
 
-        let writer_output = output_tx.clone();
+        let reader_output = WorkerEventSender {
+            sender: output_tx.clone(),
+            repaint_context: self.repaint_context.clone(),
+        };
+        let writer_output = reader_output.clone();
         thread::Builder::new()
             .name("trains-worker-stdin".to_owned())
             .spawn(move || write_worker_input(stdin, start_record, writer_rx, writer_output))
             .map_err(WorkerError::Thread)?;
 
-        let reader_output = output_tx.clone();
         thread::Builder::new()
             .name("trains-worker-stdout".to_owned())
             .spawn(move || read_worker_output(stdout, job_id, reader_output))
@@ -167,6 +183,17 @@ impl WorkerLauncher for CommandWorkerLauncher {
             failure_emitted: false,
             stdout_closed: false,
         })
+    }
+
+    fn start_with_repaint(
+        &self,
+        request: WorkerRequest,
+        data_dir: PathBuf,
+        context: egui::Context,
+    ) -> Result<WorkerHandle, WorkerError> {
+        let mut launcher = self.clone();
+        launcher.repaint_context = Some(context);
+        launcher.start(request, data_dir)
     }
 }
 
@@ -205,6 +232,20 @@ impl WorkerLauncher for EmbeddedWorkerLauncher {
         handle._bundle_guard = Some(extracted);
         Ok(handle)
     }
+
+    fn start_with_repaint(
+        &self,
+        request: WorkerRequest,
+        data_dir: PathBuf,
+        context: egui::Context,
+    ) -> Result<WorkerHandle, WorkerError> {
+        let extracted = extract_worker(EMBEDDED_WORKER, &self.temp_root, env!("CARGO_PKG_VERSION"))
+            .map_err(WorkerError::Bundle)?;
+        let launcher = CommandWorkerLauncher::new(extracted.path(), [OsString::from("--stdio")]);
+        let mut handle = launcher.start_with_repaint(request, data_dir, context)?;
+        handle._bundle_guard = Some(extracted);
+        Ok(handle)
+    }
 }
 
 #[derive(Serialize)]
@@ -232,6 +273,24 @@ enum ReaderMessage {
     OutputFailure,
     WriterFailure,
     StdoutClosed,
+}
+
+#[derive(Clone)]
+struct WorkerEventSender {
+    sender: Sender<ReaderMessage>,
+    repaint_context: Option<egui::Context>,
+}
+
+impl WorkerEventSender {
+    fn send(&self, message: ReaderMessage) -> bool {
+        if self.sender.send(message).is_err() {
+            return false;
+        }
+        if let Some(context) = &self.repaint_context {
+            context.request_repaint();
+        }
+        true
+    }
 }
 
 pub struct WorkerHandle {
@@ -396,15 +455,15 @@ fn write_worker_input(
     mut stdin: impl Write,
     start_record: Vec<u8>,
     commands: Receiver<WriterCommand>,
-    output: Sender<ReaderMessage>,
+    output: WorkerEventSender,
 ) {
     if write_record(&mut stdin, &start_record).is_err() {
-        let _ = output.send(ReaderMessage::WriterFailure);
+        output.send(ReaderMessage::WriterFailure);
         return;
     }
     while let Ok(WriterCommand::Cancel(record)) = commands.recv() {
         if write_record(&mut stdin, &record).is_err() {
-            let _ = output.send(ReaderMessage::WriterFailure);
+            output.send(ReaderMessage::WriterFailure);
             return;
         }
     }
@@ -416,29 +475,29 @@ fn write_record(writer: &mut impl Write, record: &[u8]) -> io::Result<()> {
     writer.flush()
 }
 
-fn read_worker_output(stdout: impl Read, expected_job_id: String, output: Sender<ReaderMessage>) {
+fn read_worker_output(stdout: impl Read, expected_job_id: String, output: WorkerEventSender) {
     let mut reader = BufReader::new(stdout);
     let mut completed_seen = false;
     loop {
         let line = match read_bounded_line(&mut reader) {
             Ok(Some(line)) => line,
             Ok(None) => {
-                let _ = output.send(ReaderMessage::StdoutClosed);
+                output.send(ReaderMessage::StdoutClosed);
                 return;
             }
             Err(_) => {
-                let _ = output.send(ReaderMessage::OutputFailure);
+                output.send(ReaderMessage::OutputFailure);
                 return;
             }
         };
         if completed_seen {
-            let _ = output.send(ReaderMessage::ProtocolFailure);
+            output.send(ReaderMessage::ProtocolFailure);
             return;
         }
         let line = match std::str::from_utf8(&line) {
             Ok(line) => line,
             Err(_) => {
-                let _ = output.send(ReaderMessage::ProtocolFailure);
+                output.send(ReaderMessage::ProtocolFailure);
                 return;
             }
         };
@@ -447,12 +506,12 @@ fn read_worker_output(stdout: impl Read, expected_job_id: String, output: Sender
                 if matches!(event, WorkerEvent::Completed { .. }) {
                     completed_seen = true;
                 }
-                if output.send(ReaderMessage::Event(event)).is_err() {
+                if !output.send(ReaderMessage::Event(event)) {
                     return;
                 }
             }
             Err(()) => {
-                let _ = output.send(ReaderMessage::ProtocolFailure);
+                output.send(ReaderMessage::ProtocolFailure);
                 return;
             }
         }
@@ -787,9 +846,34 @@ impl WorkerLauncher for FakeWorkerLauncher {
     fn start(
         &self,
         request: WorkerRequest,
-        _data_dir: PathBuf,
+        data_dir: PathBuf,
     ) -> Result<WorkerHandle, WorkerError> {
-        let (output_tx, output_rx) = mpsc::channel();
+        self.start_fake(request, data_dir, None)
+    }
+
+    fn start_with_repaint(
+        &self,
+        request: WorkerRequest,
+        data_dir: PathBuf,
+        context: egui::Context,
+    ) -> Result<WorkerHandle, WorkerError> {
+        self.start_fake(request, data_dir, Some(context))
+    }
+}
+
+#[cfg(feature = "desktop-smoke")]
+impl FakeWorkerLauncher {
+    fn start_fake(
+        &self,
+        request: WorkerRequest,
+        _data_dir: PathBuf,
+        repaint_context: Option<egui::Context>,
+    ) -> Result<WorkerHandle, WorkerError> {
+        let (output_sender, output_rx) = mpsc::channel();
+        let output_tx = WorkerEventSender {
+            sender: output_sender,
+            repaint_context,
+        };
         let (cancel_tx, cancel_rx) = mpsc::channel();
         let job_kind = request.job_kind;
         let desired_outcome = match std::env::var("TRAINS_UI_SMOKE_OUTCOME").as_deref() {
@@ -801,17 +885,17 @@ impl WorkerLauncher for FakeWorkerLauncher {
         thread::Builder::new()
             .name("trains-smoke-worker".to_owned())
             .spawn(move || {
-                let _ = output_tx.send(ReaderMessage::Event(WorkerEvent::Started));
+                output_tx.send(ReaderMessage::Event(WorkerEvent::Started));
                 for done in 1..=4 {
                     if cancel_rx.recv_timeout(Duration::from_millis(350)).is_ok() {
-                        let _ = output_tx.send(ReaderMessage::Event(WorkerEvent::Completed {
+                        output_tx.send(ReaderMessage::Event(WorkerEvent::Completed {
                             outcome: JobOutcome::Cancelled,
                             summary: organize_summary(job_kind, false),
                         }));
-                        let _ = output_tx.send(ReaderMessage::StdoutClosed);
+                        output_tx.send(ReaderMessage::StdoutClosed);
                         return;
                     }
-                    let _ = output_tx.send(ReaderMessage::Event(WorkerEvent::Progress {
+                    output_tx.send(ReaderMessage::Event(WorkerEvent::Progress {
                         done: Some(done),
                         total: Some(4),
                         message: Some(format!("Preparing sample issue {done} of 4 · about 1 sec")),
@@ -819,15 +903,15 @@ impl WorkerLauncher for FakeWorkerLauncher {
                     }));
                 }
                 if desired_outcome == JobOutcome::Failed {
-                    let _ = output_tx.send(ReaderMessage::Event(WorkerEvent::Error {
+                    output_tx.send(ReaderMessage::Event(WorkerEvent::Error {
                         message: "Sample worker failure for desktop verification.".to_owned(),
                     }));
                 }
-                let _ = output_tx.send(ReaderMessage::Event(WorkerEvent::Completed {
+                output_tx.send(ReaderMessage::Event(WorkerEvent::Completed {
                     outcome: desired_outcome,
                     summary: organize_summary(job_kind, desired_outcome == JobOutcome::Success),
                 }));
-                let _ = output_tx.send(ReaderMessage::StdoutClosed);
+                output_tx.send(ReaderMessage::StdoutClosed);
             })
             .map_err(WorkerError::Thread)?;
         Ok(WorkerHandle {
@@ -864,9 +948,45 @@ fn organize_summary(job_kind: JobKind, scan_complete: bool) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CancelControl, WorkerEvent, WorkerHandle, decode_event};
+    use super::{
+        CancelControl, ReaderMessage, WorkerEvent, WorkerEventSender, WorkerHandle, decode_event,
+    };
     use crate::model::MagazineProgress;
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+            mpsc,
+        },
+        thread,
+    };
+
+    #[test]
+    fn worker_message_wakes_the_ui_thread() {
+        let context = eframe::egui::Context::default();
+        let callback_count = Arc::new(AtomicUsize::new(0));
+        let callback_counter = Arc::clone(&callback_count);
+        context.set_request_repaint_callback(move |_| {
+            callback_counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let (sender, receiver) = mpsc::channel();
+        let output = WorkerEventSender {
+            sender,
+            repaint_context: Some(context),
+        };
+
+        let sent = thread::spawn(move || output.send(ReaderMessage::StdoutClosed))
+            .join()
+            .expect("worker notification thread should finish");
+
+        assert!(sent);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ReaderMessage::StdoutClosed)
+        ));
+        assert_eq!(callback_count.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn completed_worker_is_not_finished_until_stdout_closes() {

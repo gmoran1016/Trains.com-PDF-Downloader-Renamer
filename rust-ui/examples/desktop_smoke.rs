@@ -46,10 +46,10 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([
-                dimension("TRAINS_UI_SMOKE_WIDTH", 1120.0, 800.0),
-                dimension("TRAINS_UI_SMOKE_HEIGHT", 760.0, 620.0),
+                dimension("TRAINS_UI_SMOKE_WIDTH", 1120.0, 640.0),
+                dimension("TRAINS_UI_SMOKE_HEIGHT", 760.0, 480.0),
             ])
-            .with_min_inner_size([800.0, 620.0]),
+            .with_min_inner_size([640.0, 480.0]),
         ..Default::default()
     };
 
@@ -102,16 +102,20 @@ mod tests {
     }
 
     #[test]
-    fn smoke_viewport_accepts_approved_compact_height() {
-        assert_eq!(parse_dimension(Some("620".to_owned()), 760.0, 620.0), 620.0);
+    fn smoke_viewport_accepts_approved_compact_dimensions() {
+        assert_eq!(
+            parse_dimension(Some("640".to_owned()), 1120.0, 640.0),
+            640.0
+        );
+        assert_eq!(parse_dimension(Some("480".to_owned()), 760.0, 480.0), 480.0);
     }
 
     #[test]
     fn smoke_viewport_rejects_dimensions_below_each_axis_minimum() {
         assert_eq!(
-            parse_dimension(Some("799".to_owned()), 1120.0, 800.0),
+            parse_dimension(Some("639".to_owned()), 1120.0, 640.0),
             1120.0
         );
-        assert_eq!(parse_dimension(Some("619".to_owned()), 760.0, 620.0), 760.0);
+        assert_eq!(parse_dimension(Some("479".to_owned()), 760.0, 480.0), 760.0);
     }
 }

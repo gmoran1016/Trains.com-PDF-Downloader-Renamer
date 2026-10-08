@@ -10,7 +10,7 @@ pub const CANVAS: Color32 = Color32::from_rgb(239, 244, 247);
 pub const SURFACE: Color32 = Color32::WHITE;
 pub const INDEX_YELLOW: Color32 = Color32::from_rgb(255, 205, 64);
 pub const LINE: Color32 = Color32::from_rgb(213, 222, 229);
-pub const SUCCESS: Color32 = Color32::from_rgb(45, 126, 88);
+pub const SUCCESS: Color32 = Color32::from_rgb(40, 115, 79);
 pub const WARNING: Color32 = Color32::from_rgb(155, 91, 16);
 pub const WARNING_SURFACE: Color32 = Color32::from_rgb(255, 246, 225);
 pub const FAILURE: Color32 = Color32::from_rgb(175, 66, 63);
@@ -39,7 +39,7 @@ pub fn apply(ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CANVAS, NAVY, PRIMARY_ACTION_TEXT, SURFACE, WARNING, WARNING_SURFACE};
+    use super::{CANVAS, NAVY, PRIMARY_ACTION_TEXT, SUCCESS, SURFACE, WARNING, WARNING_SURFACE};
     use eframe::egui::Color32;
 
     fn linear_channel(channel: u8) -> f64 {
@@ -80,6 +80,18 @@ mod tests {
             assert!(
                 contrast >= 4.5,
                 "warning text contrast on {surface_name} was {contrast:.2}:1"
+            );
+        }
+    }
+
+    #[test]
+    fn success_status_text_meets_wcag_aa_on_light_surfaces() {
+        for (surface_name, background) in [("canvas", CANVAS), ("surface", SURFACE)] {
+            let contrast = (luminance(SUCCESS).max(luminance(background)) + 0.05)
+                / (luminance(SUCCESS).min(luminance(background)) + 0.05);
+            assert!(
+                contrast >= 4.5,
+                "success text contrast on {surface_name} was {contrast:.2}:1"
             );
         }
     }

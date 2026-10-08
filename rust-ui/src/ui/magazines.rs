@@ -63,15 +63,9 @@ pub fn build_request(settings: &Settings, job_id: String) -> WorkerRequest {
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
     ui.add_space(20.0);
     ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("MAGAZINE ARCHIVE")
-                .small()
-                .strong()
-                .color(theme::BLUE),
-        );
+        ui.heading(RichText::new("Magazine archive").size(28.0));
         ui.label(RichText::new("5 publications").small().color(theme::MUTED));
     });
-    ui.heading(RichText::new("Magazine archive").size(28.0));
     ui.label("Choose the publications and issue range for your local archive.");
     ui.add_space(12.0);
 

@@ -24,12 +24,6 @@ pub fn build_request(settings: &Settings, job_id: String) -> WorkerRequest {
 
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
     ui.add_space(20.0);
-    ui.label(
-        RichText::new("MODEL RAILROADER DATABASE")
-            .small()
-            .strong()
-            .color(theme::BLUE),
-    );
     ui.heading(RichText::new("Track Plan archive").size(28.0));
     ui.label(
         "Download the plans as PDFs while keeping their original filenames and skipping files already in your archive.",

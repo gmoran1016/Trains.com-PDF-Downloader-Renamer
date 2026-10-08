@@ -39,16 +39,21 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                     AppPage::Organize => crate::ui::organize::show_action(app, ui),
                 });
 
-            egui::ScrollArea::vertical()
-                .id_salt("work_area_scroll")
-                .auto_shrink([false, false])
+            Frame::new()
+                .fill(theme::CANVAS)
+                .inner_margin(egui::Margin::symmetric(20, 0))
                 .show(ui, |ui| {
-                    ui.set_max_width(980.0);
-                    match app.active_page() {
-                        AppPage::Magazines => crate::ui::magazines::show(app, ui),
-                        AppPage::TrackPlans => crate::ui::track_plans::show(app, ui),
-                        AppPage::Organize => crate::ui::organize::show(app, ui),
-                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt("work_area_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_max_width(980.0);
+                            match app.active_page() {
+                                AppPage::Magazines => crate::ui::magazines::show(app, ui),
+                                AppPage::TrackPlans => crate::ui::track_plans::show(app, ui),
+                                AppPage::Organize => crate::ui::organize::show(app, ui),
+                            }
+                        });
                 });
         });
     crate::ui::account::show(app, ctx);

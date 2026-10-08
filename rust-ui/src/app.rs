@@ -284,10 +284,6 @@ impl TrainsApp {
             && self.active_worker.is_none()
     }
 
-    fn needs_worker_repaint(&self) -> bool {
-        self.queued_request.is_some() || self.start_result.is_some() || self.active_worker.is_some()
-    }
-
     pub(crate) fn activity_filter_mut(&mut self) -> &mut String {
         &mut self.activity_filter
     }
@@ -440,17 +436,21 @@ impl TrainsApp {
         self.queue_request(request);
     }
 
-    fn dispatch_queued_request(&mut self) {
+    fn dispatch_queued_request(&mut self, ctx: &egui::Context) {
         let Some(request) = self.queued_request.take() else {
             return;
         };
         let (sender, receiver) = mpsc::channel();
         let launcher = Arc::clone(&self.worker);
         let data_dir = self.data_dir.clone();
+        let repaint_context = ctx.clone();
         match thread::Builder::new()
             .name("trains-worker-launch".to_owned())
             .spawn(move || {
-                let _ = sender.send(launcher.start(request, data_dir));
+                let result =
+                    launcher.start_with_repaint(request, data_dir, repaint_context.clone());
+                let _ = sender.send(result);
+                repaint_context.request_repaint();
             }) {
             Ok(_) => self.start_result = Some(receiver),
             Err(_) => self.fail_worker_start("The worker could not be scheduled to start."),
@@ -554,12 +554,12 @@ impl eframe::App for TrainsApp {
         if ctx.input(|input| input.viewport().close_requested()) && !self.handle_window_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
-        self.dispatch_queued_request();
+        self.dispatch_queued_request(&ctx);
         self.poll_worker();
         crate::ui::shell::show(self, ui, &ctx);
         self.close_after_worker_if_ready(&ctx);
-        if self.needs_worker_repaint() {
-            ctx.request_repaint_after(Duration::from_millis(50));
+        if self.active_worker.is_some() {
+            ctx.request_repaint_after(Duration::from_secs(1));
         }
     }
 }

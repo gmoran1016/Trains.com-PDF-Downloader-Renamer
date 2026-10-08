@@ -19,7 +19,7 @@ This is an **Operate** surface. Magazines, Track Plans, and Organize have equal 
 | Surface | `#FFFFFF` | Header, panels, and activity |
 | Index yellow | `#FFCD40` | Selected index mark and key emphasis |
 | Line | `#D5DEE5` | Panel and control boundaries |
-| Success | `#2D7E58` | Completed jobs |
+| Success | `#28734F` | Completed jobs |
 | Warning | `#9B5B10` | Warnings and cancellation |
 | Warning surface | `#FFF6E1` | Warning message background |
 | Failure | `#AF423F` | Failed jobs and errors |
@@ -33,14 +33,14 @@ The Rust UI uses egui's proportional sans-serif family. With the shipped epaint 
 
 ## Layout and spacing
 
-- Minimum client size: 800 × 620 px.
+- Minimum client size: 640 × 480 px.
 - Navigation rail: 208 px wide at wider sizes and 156 px below 1000 px.
 - Header and sticky workflow action area: 64 px each.
-- Work-area content max width: 980 px; smaller windows scroll vertically.
-- Activity: 190 px default height, 112–340 px expanded range, 48 px collapsed strip.
+- Work-area content shares a 20 px horizontal inset with the sticky workflow actions, has a 980 px maximum width, and scrolls vertically in smaller windows.
+- Activity: 190 px default height, 112–340 px expanded range, 48 px collapsed strip. In short windows, the expanded dock is capped to preserve at least 208 px for the work area after the header and workflow actions.
 - Theme item spacing: 10 × 9 px; button padding: 13 × 8 px.
 
-At 800 × 620, the action area and Activity remain visible while longer work-area forms scroll. The layout avoids horizontal scrolling and keeps the primary action anchored above Activity.
+At 640 × 480, the navigation rail uses its compact width, the work-area heading remains visible above the pinned action, and longer forms scroll. Activity stays visible and yields height to preserve a useful work area. The layout avoids horizontal scrolling and keeps the primary action anchored above Activity.
 
 ## Interaction and state
 
@@ -48,4 +48,4 @@ Use the standard controls provided by egui/eframe, including buttons, checkboxes
 
 ## Review evidence
 
-The native eframe window captures are [wide](.impeccable/review/desktop-wide-1440x900.png) and [compact](.impeccable/review/desktop-compact-800x620.png). Their client areas are 1440 × 900 and 800 × 620 px. Both were captured before the final text-contrast token adjustments; layout did not change afterward, and the final colors were checked in Rust contrast tests. A post-fix OS-window recapture and native UI Automation pass were unavailable after Windows Defender blocked the UIA harness. No web detector ran because this is a native Rust UI with no HTML/CSS surface.
+The saved native eframe captures are [wide](.impeccable/review/desktop-wide-1440x900.png) at 1440 × 900 and [compact](.impeccable/review/desktop-compact-800x620.png) at 800 × 620. They predate the 640 × 480 minimum-window adaptation, the shared work-area inset, and the final text-contrast adjustments. Geometry is covered by the desktop UI harness at 640 × 480, 800 × 620, and 1440 × 900; these checks do not replace a fresh native-window capture. No web detector ran because this is a native Rust UI with no HTML/CSS surface.
