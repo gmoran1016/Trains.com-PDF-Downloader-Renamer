@@ -1,6 +1,6 @@
 # Tauri UI replacement verification
 
-Date: 2026-10-09. Version candidate: 1.10.0.
+Date: 2026-10-09. Version: 1.10.0.
 
 ## Scope and result
 
@@ -16,7 +16,7 @@ Replaced the egui interface with Tauri 2, React, and TypeScript. Retained the Py
 | TypeScript and Vite production build | Passed |
 | Shared version check | All six surfaces match 1.10.0 |
 | Bundled worker smoke check | Passed |
-| Windows portable and NSIS build | Produced; final review rebuild pending |
+| Windows portable and NSIS build | Rebuilt successfully after review fix |
 | Production startup and normal close | Passed in an isolated data directory |
 
 ## Rendered evidence
@@ -43,4 +43,13 @@ A fresh reviewer inspected the complete migration from `3909eb3` through `dc195c
 
 Windows requires WebView2; the portable executable uses the installed runtime, while the per-user installer provides its bootstrapper. Chrome is required for download jobs. Linux AppImage and macOS DMG builds are configured in CI, with Linux based on Ubuntu 22.04. AppImage data stays beside the original image; macOS data stays beside the `.app` folder, which must be in a writable location. Packages are unsigned unless signing is configured.
 
-Local Windows checks do not establish Linux/macOS runtime behavior or a real subscribed download. GitHub publication is gated on every matrix build succeeding. Final independent review, rebuild hashes, and the exact GitHub run will be recorded below when complete.
+Local Windows checks do not establish Linux/macOS runtime behavior or a real subscribed download. GitHub publication is gated on every matrix build succeeding. The exact GitHub run will be recorded after it completes.
+
+## Final local package
+
+Application source: `34f4f2d20661500bce5d39fac1dc937d6230ac20`. Built using `scripts/build-desktop.ps1` after the full green checks. The fresh bundled worker completed an isolated organize request; the packaged app opened and closed successfully in another temporary data root. Production web assets exclude the verification bridge, and the production Rust build excludes `ui-qa`.
+
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| TrainsDownloader-windows.exe | 96,849,408 | `e0f5b38ec53ccc0b11c05414322eeb7a807a6ab8154228e0207860a029571ee5` |
+| TrainsDownloader-windows-setup.exe | 88,989,002 | `44b9b3e9bb363cd43efc82f7d66c568b0812d75a00564551c5515e655f082e08` |
