@@ -105,6 +105,9 @@ for (const [width, height] of [
     test(
       "controls fit " + width + "x" + height + " " + (dark ? "dark" : "light"),
       async ({ page }) => {
+        // Each case renders three work areas and four screenshots. Windows CI
+        // can take just over Playwright's default 30 seconds under two workers.
+        test.setTimeout(60_000);
         await page.setViewportSize({ width, height });
         await desktopFixture(page, {
           dark,
