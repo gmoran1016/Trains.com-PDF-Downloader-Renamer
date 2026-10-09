@@ -11,7 +11,7 @@ Replaced the egui interface with Tauri 2, React, and TypeScript. Retained the Py
 | Python engine, browser-adapter and worker tests | 97 passed |
 | Rust controller/settings/protocol/bundle tests | 34 passed |
 | Native shell data-location test | 1 passed |
-| Rendered interaction/layout tests | 25 passed |
+| Rendered interaction/layout tests | 26 passed |
 | Rust formatting and Clippy with warnings denied | Passed |
 | TypeScript and Vite production build | Passed |
 | Shared version check | All six surfaces match 1.10.0 |
@@ -34,6 +34,10 @@ The built app was inspected through Windows accessibility and screenshot capture
 A separate verification build required both `--qa` and `--data-dir` to use a sample worker. An organizer job completed and exposed all counts, the full report and safe Download Missing action. Stop produced Cancelled, kept partial findings, and removed the unsafe follow-up action. Closing during a job exposed Cancel, Minimize to Tray and Stop & Quit; Stop & Quit cancelled and exited. An unknown settings field remained intact after UI saves.
 
 The production package also launched its real embedded Python worker through the UI against newly created empty temporary folders. It returned a complete scan with zero counts and the distinct No results outcome. No live login, cookie contents, network archive download, or user library changes were used. Production is built without the fake-worker feature.
+
+## Independent review
+
+A fresh reviewer inspected the complete migration from `3909eb3` through `dc195cc`, including lifecycle races, incomplete scans, settings preservation, missing downloads, window controls, portable data paths, and release gating. The sole substantive finding was an Activity fetch debounce that continuous 50 ms worker updates could postpone indefinitely. A rendered test reproduced the missing rows before correction. Activity now refreshes on a bounded clock, retains revisions received during a request, and debounces only filter input. The test confirms both messages and errors appear while logging continues; the full 26-test rendered suite and all Python/Rust checks passed afterward. No findings were deferred.
 
 ## Platform and release boundaries
 

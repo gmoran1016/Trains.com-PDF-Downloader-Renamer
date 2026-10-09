@@ -234,6 +234,33 @@ test("activity filters retained history, copies errors and clears explicitly", a
   ).toBeVisible();
 });
 
+test("activity shows new rows and errors while worker logs continue every 50 ms", async ({
+  page,
+}) => {
+  await desktopFixture(page, { expanded: true, outcome: "running" });
+  await page.goto("/");
+  await page
+    .getByLabel("Filter activity", { exact: true })
+    .fill("Streaming event");
+  await page.evaluate(() => (window as any).__TRAINS_QA__.startLogStream());
+  try {
+    await expect(
+      page.getByRole("log").getByText("Streaming event 1", { exact: true }),
+    ).toBeVisible({ timeout: 2000 });
+    await expect(
+      page.getByRole("log").getByText("Streaming event 12", { exact: true }),
+    ).toBeVisible({ timeout: 2000 });
+    await expect(page.locator(".log-row.error")).toContainText(
+      "Streaming event 1",
+    );
+    expect(
+      await page.evaluate(() => (window as any).__TRAINS_QA__.streaming),
+    ).toBe(true);
+  } finally {
+    await page.evaluate(() => (window as any).__TRAINS_QA__.stopLogStream());
+  }
+});
+
 for (const [outcome, label] of [
   ["idle", "Ready"],
   ["running", "Running"],

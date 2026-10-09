@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -34,36 +34,56 @@ export function Activity({
   onError: (error: string) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState("");
   const [offset, setOffset] = useState(0);
   const [rows, setRows] = useState<ActivityPage>({ entries: [], total: 0 });
   const [copied, setCopied] = useState(false);
   const [height, setHeight] = useState(settings.activity_height);
+  const revision = useRef("");
+  const reportError = useRef(onError);
   const expanded = !settings.activity_collapsed;
   useEffect(
     () => setHeight(settings.activity_height),
     [settings.activity_height],
   );
   useEffect(() => {
+    revision.current = `${state.log_count}:${state.error_count}`;
+    reportError.current = onError;
+  }, [state.log_count, state.error_count, onError]);
+  useEffect(() => {
+    const timer = setTimeout(() => setFilter(query), 80);
+    return () => clearTimeout(timer);
+  }, [query]);
+  useEffect(() => {
     if (!expanded) return;
     let active = true;
-    const timer = setTimeout(() => {
-      void desktopInvoke<ActivityPage>("get_activity", {
-        query,
-        offset,
-        limit: 100,
-      })
-        .then((rows) => {
-          if (active) setRows(rows);
-        })
-        .catch((error) => {
-          if (active) onError(errorMessage(error));
-        });
-    }, 80);
+    let fetchedRevision: string | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      const currentRevision = revision.current;
+      if (currentRevision !== fetchedRevision) {
+        try {
+          const next = await desktopInvoke<ActivityPage>("get_activity", {
+            query: filter,
+            offset,
+            limit: 100,
+          });
+          if (active) setRows(next);
+        } catch (error) {
+          if (active) reportError.current(errorMessage(error));
+        }
+        fetchedRevision = currentRevision;
+      }
+      // Worker snapshots never restart this clock. Slow requests finish before
+      // scheduling the next fetch, and revisions received in flight stay pending.
+      if (active) timer = setTimeout(() => void refresh(), 150);
+    };
+    void refresh();
     return () => {
       active = false;
       clearTimeout(timer);
     };
-  }, [expanded, query, offset, state.log_count, state.error_count]);
+  }, [expanded, filter, offset]);
   const [label, Icon] = outcomes[state.job.outcome];
   const message = state.job.outcome === "idle" ? "" : state.job.message;
   const progress =

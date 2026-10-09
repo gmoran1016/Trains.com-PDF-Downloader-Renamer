@@ -90,12 +90,34 @@ export async function desktopFixture(
     current.error_count = 13;
     const listeners = new Map<string, Set<(value: unknown) => void>>();
     const records: { command: string; args: Record<string, unknown> }[] = [];
+    let streamTimer: ReturnType<typeof setInterval> | undefined;
     const emit = () =>
       listeners
         .get("state-changed")
         ?.forEach((listener) => listener(structuredClone(current)));
     const qa = {
       records,
+      streaming: false,
+      startLogStream: () => {
+        let sequence = 0;
+        qa.streaming = true;
+        const append = () => {
+          sequence += 1;
+          logs.unshift({
+            level: sequence === 1 ? "error" : "info",
+            message: "Streaming event " + sequence,
+          });
+          current.log_count = logs.length;
+          if (sequence === 1) current.error_count += 1;
+          emit();
+        };
+        append();
+        streamTimer = setInterval(append, 50);
+      },
+      stopLogStream: () => {
+        clearInterval(streamTimer);
+        qa.streaming = false;
+      },
       listen: async (event: string, callback: (value: unknown) => void) => {
         if (!listeners.has(event)) listeners.set(event, new Set());
         listeners.get(event)!.add(callback);
