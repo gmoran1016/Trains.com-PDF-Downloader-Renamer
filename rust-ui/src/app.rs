@@ -48,6 +48,7 @@ pub struct TrainsApp {
     quit_after_worker: bool,
     clear_cache_confirmation: bool,
     notice: Option<String>,
+    fonts_installed: bool,
 }
 
 #[derive(Default)]
@@ -98,6 +99,7 @@ impl TrainsApp {
             quit_after_worker: false,
             clear_cache_confirmation: false,
             notice: None,
+            fonts_installed: false,
         }
     }
 
@@ -108,6 +110,16 @@ impl TrainsApp {
     pub fn set_active_page(&mut self, page: AppPage) {
         if self.settings.selected_page != page {
             self.settings.selected_page = page;
+            self.settings_error = self.save_settings().err().map(|error| error.to_string());
+            if self.notice.as_deref() == Some("Settings saved.") {
+                self.notice = None;
+            }
+        }
+    }
+
+    pub fn set_dark_mode(&mut self, dark_mode: bool) {
+        if self.settings.dark_mode != dark_mode {
+            self.settings.dark_mode = dark_mode;
             self.save_settings_notice();
         }
     }
@@ -548,7 +560,11 @@ impl TrainsApp {
 
 impl eframe::App for TrainsApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        theme::apply(ui.ctx());
+        if !self.fonts_installed {
+            theme::install_fonts(ui.ctx());
+            self.fonts_installed = true;
+        }
+        theme::apply(ui.ctx(), self.settings.dark_mode);
         let ctx = ui.ctx().clone();
         self.poll_tray_actions(&ctx);
         if ctx.input(|input| input.viewport().close_requested()) && !self.handle_window_close() {
@@ -567,7 +583,26 @@ impl eframe::App for TrainsApp {
 #[cfg(test)]
 mod tests {
     use super::{ActivityProjection, TrainsApp, UnavailableWorker};
-    use crate::{model::LogEntry, worker::WorkerEvent};
+    use crate::{
+        model::{AppPage, LogEntry},
+        settings::Settings,
+        worker::WorkerEvent,
+    };
+
+    #[test]
+    fn changing_work_area_persists_without_a_success_notice() {
+        let data_dir = tempfile::tempdir().expect("temporary app data root");
+        let mut app = TrainsApp::new(data_dir.path().to_path_buf(), Box::new(UnavailableWorker));
+
+        app.set_active_page(AppPage::TrackPlans);
+
+        assert_eq!(app.active_page(), AppPage::TrackPlans);
+        assert_eq!(
+            Settings::load(data_dir.path()).settings.selected_page,
+            AppPage::TrackPlans
+        );
+        assert!(app.notice.is_none());
+    }
 
     #[test]
     fn cache_confirmation_cannot_remove_worker_state_during_a_job() {

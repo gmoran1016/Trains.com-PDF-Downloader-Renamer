@@ -227,6 +227,37 @@ fn organizer_shows_complete_summary() {
     }
 }
 
+#[test]
+fn organizer_summary_wraps_counts_at_compact_width() {
+    let temp = tempfile::tempdir().expect("temporary app data root");
+    let mut harness = harness_at(temp.path().to_path_buf(), Vec2::new(640.0, 480.0));
+    harness
+        .state_mut()
+        .apply_worker_event(WorkerEvent::Completed {
+            outcome: JobOutcome::Success,
+            summary: Some(serde_json::json!({
+                "moved": 7,
+                "already_correct": 2,
+                "unrecognized": 1,
+                "corrupt": 3,
+                "conflicts": 4,
+                "metadata_stamped": 5,
+                "report": [],
+                "scan_complete": true
+            })),
+        });
+
+    harness.get_by_label("Organize").click();
+    harness.run();
+
+    let third_count = harness.get_by_label("Unrecognized: 1").rect();
+    let fourth_count = harness.get_by_label("Corrupt: 3").rect();
+    assert!(
+        third_count.min.x < fourth_count.min.x,
+        "the third count should start a new grid row in a compact layout: {third_count:?} vs {fourth_count:?}"
+    );
+}
+
 fn missing_download_action_is_visible_and_clickable(size: Vec2) {
     let temp = tempfile::tempdir().expect("temporary app data root");
     let mut harness = harness_at(temp.path().to_path_buf(), size);
@@ -254,6 +285,19 @@ fn missing_download_action_is_visible_and_clickable(size: Vec2) {
     assert!(
         (organize.center().y - missing_rect.center().y).abs() < 3.0,
         "both organizer actions must fit in the fixed action row: {organize:?} vs {missing_rect:?}"
+    );
+    for (label, rect) in [
+        ("Organize PDFs", organize),
+        ("Download Missing", missing_rect),
+    ] {
+        assert!(
+            rect.min.x >= 0.0 && rect.min.y >= 0.0 && rect.max.x <= size.x && rect.max.y <= size.y,
+            "{label} exceeds the {size:?} window: {rect:?}"
+        );
+    }
+    assert!(
+        harness.state().can_start_job(),
+        "Download Missing should be enabled for a completed scan"
     );
     missing.click();
     harness.step();

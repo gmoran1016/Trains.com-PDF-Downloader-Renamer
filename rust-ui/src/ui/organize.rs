@@ -85,23 +85,28 @@ fn selected_missing_target(summary: &Value) -> Option<(&'static str, &'static st
 }
 
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
+    let colors = theme::palette(app.settings().dark_mode);
     ui.add_space(20.0);
-    ui.heading(RichText::new("PDF organizer").size(28.0));
+    ui.heading("PDF organizer");
     ui.label("Sort PDFs into the archive, review coverage, and find missing issues.");
     ui.add_space(14.0);
 
     Frame::group(ui.style())
-        .fill(theme::SURFACE)
-        .stroke(Stroke::new(1.0, theme::LINE))
-        .inner_margin(egui::Margin::same(16))
+        .fill(colors.surface)
+        .stroke(Stroke::new(1.0, colors.line))
+        .inner_margin(egui::Margin::same(18))
         .show(ui, |ui| {
-            ui.label(RichText::new("Folders").strong().color(theme::NAVY));
+            ui.label(
+                RichText::new("Folders")
+                    .text_style(egui::TextStyle::Button)
+                    .color(colors.blue),
+            );
             ui.add_space(8.0);
             folder_setting(app, ui, "Source folder", true);
             ui.add_space(6.0);
             folder_setting(app, ui, "Archive destination", false);
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Magazine prefix");
                 egui::ComboBox::from_id_salt("organizer_prefix")
                     .selected_text(app.settings().org_prefix.as_str())
@@ -119,25 +124,26 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
                 ui.label(
                     RichText::new("Use Auto-detect unless filenames need a hint.")
                         .small()
-                        .color(theme::MUTED),
+                        .color(colors.muted),
                 );
             });
         });
 
     ui.add_space(12.0);
-    show_summary(app, ui);
+    show_summary(app, ui, colors);
 }
 
 pub(crate) fn show_action(app: &mut TrainsApp, ui: &mut egui::Ui) {
+    let colors = theme::palette(app.settings().dark_mode);
     let ready = !app.settings().org_src.trim().is_empty()
         && !app.settings().org_dst.trim().is_empty()
         && app.can_start_job();
     let button = Button::new(
         RichText::new("Organize PDFs")
             .strong()
-            .color(theme::PRIMARY_ACTION_TEXT),
+            .color(colors.primary_action_text),
     )
-    .fill(theme::NAVY)
+    .fill(colors.navy)
     .stroke(Stroke::NONE)
     .min_size(egui::vec2(190.0, 42.0));
     let missing_available = app
@@ -152,7 +158,7 @@ pub(crate) fn show_action(app: &mut TrainsApp, ui: &mut egui::Ui) {
 
         if missing_available {
             let button = Button::new(RichText::new("Download Missing").strong())
-                .fill(theme::INDEX_YELLOW)
+                .fill(colors.index_yellow)
                 .stroke(Stroke::NONE)
                 .min_size(egui::vec2(178.0, 42.0));
             download_missing = ui.add_enabled(app.can_start_job(), button).clicked();
@@ -162,10 +168,6 @@ pub(crate) fn show_action(app: &mut TrainsApp, ui: &mut egui::Ui) {
         app.queue_organize();
     } else if download_missing {
         app.queue_missing_download();
-    }
-    if let Some(notice) = app.notice() {
-        ui.add_space(4.0);
-        ui.label(RichText::new(notice).small().color(theme::MUTED));
     }
 }
 
@@ -213,46 +215,55 @@ fn folder_setting(app: &mut TrainsApp, ui: &mut egui::Ui, label: &str, source: b
     });
 }
 
-fn show_summary(app: &TrainsApp, ui: &mut egui::Ui) {
+fn show_summary(app: &TrainsApp, ui: &mut egui::Ui, colors: &theme::Palette) {
     let Some(summary) = app.job_state().summary.as_ref() else {
         Frame::group(ui.style())
-            .fill(theme::SURFACE)
-            .stroke(Stroke::new(1.0, theme::LINE))
-            .inner_margin(egui::Margin::same(16))
+            .fill(colors.surface)
+            .stroke(Stroke::new(1.0, colors.line))
+            .inner_margin(egui::Margin::same(18))
             .show(ui, |ui| {
-                ui.label(RichText::new("Scan summary").strong().color(theme::NAVY));
-                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Scan summary")
+                        .text_style(egui::TextStyle::Button)
+                        .color(colors.blue),
+                );
+                ui.add_space(6.0);
                 ui.label("A full count and coverage report will appear here after the scan.");
             });
         return;
     };
 
     Frame::group(ui.style())
-        .fill(theme::SURFACE)
-        .stroke(Stroke::new(1.0, theme::LINE))
-        .inner_margin(egui::Margin::same(16))
+        .fill(colors.surface)
+        .stroke(Stroke::new(1.0, colors.line))
+        .inner_margin(egui::Margin::same(18))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Scan summary").strong().color(theme::NAVY));
+                ui.label(
+                    RichText::new("Scan summary")
+                        .text_style(egui::TextStyle::Button)
+                        .color(colors.blue),
+                );
                 if summary.get("scan_complete").and_then(Value::as_bool) == Some(true) {
                     ui.label(
                         RichText::new("Complete scan")
                             .strong()
-                            .color(theme::SUCCESS),
+                            .color(colors.success),
                     );
                 } else {
                     ui.label(
                         RichText::new("Incomplete scan")
                             .strong()
-                            .color(theme::FAILURE),
+                            .color(colors.failure),
                     );
                 }
-                ui.label(RichText::new(app.job_state().outcome.label()).color(theme::MUTED));
+                ui.label(RichText::new(app.job_state().outcome.label()).color(colors.muted));
             });
             ui.add_space(8.0);
+            let count_columns = if ui.available_width() < 620.0 { 2 } else { 3 };
             egui::Grid::new("organizer_counts")
-                .num_columns(3)
-                .spacing([22.0, 8.0])
+                .num_columns(count_columns)
+                .spacing([18.0, 10.0])
                 .show(ui, |ui| {
                     for (index, (key, label)) in [
                         ("moved", "Moved"),
@@ -266,7 +277,7 @@ fn show_summary(app: &TrainsApp, ui: &mut egui::Ui) {
                     .enumerate()
                     {
                         ui.label(format!("{label}: {}", count(summary, key)));
-                        if index % 3 == 2 {
+                        if index % count_columns == count_columns - 1 {
                             ui.end_row();
                         }
                     }
@@ -275,7 +286,11 @@ fn show_summary(app: &TrainsApp, ui: &mut egui::Ui) {
             let report = summary.get("report").and_then(Value::as_array);
             if let Some(report) = report.filter(|report| !report.is_empty()) {
                 ui.add_space(8.0);
-                ui.label(RichText::new("Coverage report").strong().color(theme::NAVY));
+                ui.label(
+                    RichText::new("Coverage report")
+                        .text_style(egui::TextStyle::Button)
+                        .color(colors.blue),
+                );
                 for line in report.iter().filter_map(Value::as_str) {
                     ui.label(line);
                 }

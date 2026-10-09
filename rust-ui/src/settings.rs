@@ -37,6 +37,7 @@ pub struct Settings {
     pub window_height: f32,
     pub activity_height: f32,
     pub activity_collapsed: bool,
+    pub dark_mode: bool,
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -75,8 +76,9 @@ impl Settings {
             selected_page: AppPage::Magazines,
             window_width: 1120.0,
             window_height: 760.0,
-            activity_height: 190.0,
+            activity_height: 220.0,
             activity_collapsed: false,
+            dark_mode: false,
             extra: BTreeMap::new(),
         }
     }

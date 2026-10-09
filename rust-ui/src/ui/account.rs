@@ -8,35 +8,36 @@ pub(crate) fn show(app: &mut TrainsApp, ctx: &egui::Context) {
     if !app.account_open() {
         return;
     }
+    let colors = theme::palette(app.settings().dark_mode);
     let mut open = true;
     egui::Window::new("Account settings")
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
-        .default_width(470.0)
+        .default_width(520.0)
         .show(ctx, |ui| {
             ui.label(
                 RichText::new("Shared access settings")
                     .strong()
-                    .color(theme::NAVY),
+                    .color(colors.navy),
             );
             ui.label("Choose the local cookie file used to access Trains.com.");
             ui.add_space(8.0);
 
             let mut cookie_path = app.settings().cookies_path.clone();
+            let label = ui.label("Cookie file path");
             ui.horizontal(|ui| {
-                let label = ui.label("Cookie file path");
                 let response = ui
                     .add(
                         egui::TextEdit::singleline(&mut cookie_path)
                             .hint_text("Path to session cookie file")
-                            .desired_width(320.0),
+                            .desired_width((ui.available_width() - 112.0).max(140.0)),
                     )
                     .labelled_by(label.id);
                 if response.changed() {
                     app.settings_mut().cookies_path.clone_from(&cookie_path);
                 }
-                if ui.button("Browse…").clicked() {
+                if ui.button("Choose file…").clicked() {
                     let mut dialog = rfd::FileDialog::new().set_file_name("session_cookies.json");
                     if !cookie_path.trim().is_empty()
                         && let Some(parent) = Path::new(&cookie_path).parent()
@@ -57,7 +58,7 @@ pub(crate) fn show(app: &mut TrainsApp, ctx: &egui::Context) {
                     "Cookie file not found. Its contents are never shown."
                 })
                 .small()
-                .color(if exists { theme::SUCCESS } else { theme::MUTED }),
+                .color(if exists { colors.success } else { colors.muted }),
             );
             ui.add_space(10.0);
 
@@ -81,7 +82,7 @@ pub(crate) fn show(app: &mut TrainsApp, ctx: &egui::Context) {
             ui.label(
                 RichText::new("These choices are shared with their matching work areas.")
                     .small()
-                    .color(theme::MUTED),
+                    .color(colors.muted),
             );
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -90,9 +91,9 @@ pub(crate) fn show(app: &mut TrainsApp, ctx: &egui::Context) {
                         Button::new(
                             RichText::new("Save settings")
                                 .strong()
-                                .color(theme::PRIMARY_ACTION_TEXT),
+                                .color(colors.primary_action_text),
                         )
-                        .fill(theme::NAVY)
+                        .fill(colors.navy)
                         .stroke(Stroke::NONE),
                     )
                     .clicked()

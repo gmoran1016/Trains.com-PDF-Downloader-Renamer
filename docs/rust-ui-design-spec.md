@@ -13,7 +13,7 @@ The UI is new work. It will not reuse the old PyQt layout, styling, or component
 
 **THESIS:** A clear annual index is the visual language for a tool that retrieves and keeps a trustworthy local archive. The app keeps familiar desktop navigation and controls; it avoids both the generic metrics-and-log dashboard and a nostalgic paper replica.
 
-**OWN-WORLD:** Use a cool, bright work surface, a broad deep-blue navigation rail and title band, and a warm yellow index mark for selection. Pair platform-native sans-serif UI text with tabular numerals for issue counts, dates, and progress. Keep title rows compact and aligned; give status colors distinct, consistent meanings.
+**OWN-WORLD:** Use a cool, bright work surface, a broad deep-blue navigation rail and title band, and a warm yellow index mark for selection. Pair bundled Source Sans 3 Regular and Semibold with aligned issue counts, dates, and progress. Keep title rows compact and aligned; give status colors distinct, consistent meanings.
 
 **STORY:** The user chooses one of three jobs, checks the correct source and destination, and starts it. Activity shows truthful progress, a stop action, and a distinct success, no-results, failure, or cancelled result. Organize retains useful partial findings after a failed scan without presenting them as a complete scan.
 
@@ -27,8 +27,8 @@ The UI is new work. It will not reuse the old PyQt layout, styling, or component
 
 ## Visual and interaction system
 
-- **Color:** cool light canvas and white work surfaces; deep blue for the shell; yellow for selected index/navigation emphasis; dark ink for primary text; muted blue-gray for secondary text; green, amber, and red for success, warning, and failure. Never communicate state by color alone. Keep focus and selection visibly distinct from job outcome.
-- **Type:** native platform sans-serif fonts, with tabular numerals where values are compared. Use a compact, readable scale suited to repeated desktop work; avoid decorative display type and tiny all-caps labels.
+- **Color:** cool light canvas and white work surfaces; deep blue for the shell; yellow for selected index/navigation emphasis; dark ink for primary text; muted blue-gray for secondary text; green, amber, and red for success, warning, and failure. Never communicate state by color alone. Keep focus and selection visibly distinct from job outcome. Offer a persistent light/dark theme toggle with readable status colors in both modes.
+- **Type:** bundle Source Sans 3 Regular and Semibold with the SIL Open Font License. Use 16-point body and button text, 14-point compact labels, and 26-point work-area headings. Avoid decorative display type and tiny all-caps labels.
 - **Density:** clear section headings, aligned folder and option rows, compact publication selectors, and honest empty/loading/error states. No decorative charts, false data, paper texture, or oversized summary cards.
 - **Controls:** use standard native buttons, checkboxes, text inputs, combo boxes, menus, folder pickers, focus behavior, and keyboard navigation. The annual-index world contributes type, palette, density, and the selected-index mark; it does not change navigation or turn controls into document props.
 - **Motion:** keep window and panel interactions immediate. Use only brief state transitions that clarify a completed, running, or selected item; no looping ornament or progress animation unsupported by worker events.
@@ -80,13 +80,13 @@ The following files stay in their current data directory and retain their existi
 
 - Support keyboard navigation, visible focus, useful accessible names and roles, and screen-reader-readable job outcomes. Do not rely on color alone.
 - Keep the UI event loop free of file, network, and worker waits. Do not block a frame while launching or stopping a process. Read and render logs efficiently while retaining complete session output until Clear.
-- Preserve a usable layout at the approved 1440×900 and 800×620 desktop sizes. At the smaller size, avoid clipped primary actions, overlapping controls, and horizontal scrolling.
+- Preserve a usable layout at 1440×900 and 800×620, and keep the 640×480 minimum window usable. Check idle and running states in both themes; avoid clipped primary actions, overlapping controls, and horizontal scrolling.
 
 ## Verification scope
 
 - Keep the existing Python engine tests.
 - Add Rust settings/state tests and JSON-lines worker protocol/integration checks using temporary folders and a fake worker.
-- Replace the PyQt-only UI smoke checks with real Rust desktop screenshot and interaction checks at 1440×900 and 800×620. Cover all three work areas, account/settings persistence, Activity resizing/collapse, running progress/stop, and success, no-results, failed, and cancelled states.
+- Replace the PyQt-only UI smoke checks with real Rust desktop screenshot and interaction checks at 1440×900 and 800×620, including the 640×480 minimum window in layout coverage. Cover all three work areas, account/settings persistence, Activity resizing/collapse, running progress/stop, and success, no-results, failed, and cancelled states.
 - Build the Windows desktop package locally. Keep CI package builds for Windows, Linux, and macOS.
 - No test may use a live Trains.com login or alter the user's library, settings, cookie file, progress file, special-issue file, or log. Use temporary data roots and a fake worker.
 

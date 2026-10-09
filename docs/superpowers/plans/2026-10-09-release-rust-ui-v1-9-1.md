@@ -1,10 +1,10 @@
-# Rust Desktop UI v1.9.0 Release Plan
+# Rust Desktop UI v1.9.1 Release Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Publish the prepared native Rust desktop application and Track Plans workflow as v1.9.0, then verify the Windows, Linux, and macOS release builds.
+**Goal:** Publish the improved native Rust desktop application as v1.9.1, then verify the Windows, Linux, and macOS release builds.
 
-**Architecture:** Keep the existing Python downloader and organizer as a bundled worker behind the Rust desktop app. Align the Python, Cargo, lockfile, and README versions, run the isolated local Windows package, then push the reviewed change set to `main` so the existing GitHub Actions matrix builds and publishes v1.9.0.
+**Architecture:** Keep the existing Python downloader and organizer as a bundled worker behind the Rust desktop app. Align the Python, Cargo, lockfile, and README versions, run the isolated local Windows package, then push the reviewed change set to `main` so the existing GitHub Actions matrix builds and publishes v1.9.1.
 
 **Tech Stack:** Python 3.13 CI, PyInstaller, Rust stable, Cargo, eframe, pytest, GitHub Actions.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - The user explicitly authorized pushing this release to GitHub and asked for a new version build.
-- Use v1.9.0 because v1.8.6 is the latest published version and this change adds the Rust desktop UI and a Track Plans workflow.
+- Use v1.9.1 because v1.9.0 is already published and this patch improves the Rust desktop UI's legibility and compact-window layout.
 - Preserve the existing dirty Rust UI rewrite and stage its related source, tests, build workflow, and documentation; do not stage unrelated files.
 - Preserve `session_cookies.json`, settings, progress, logs, downloaded files, and every existing file under `build/` and `dist/`.
 - Keep Python `APP_VERSION`, Cargo package version and lockfile package version, README version, and release tag aligned.
@@ -24,8 +24,17 @@
 - Version drift between app metadata and the tag must fail before publication.
 - Existing runtime state and build outputs must remain ignored and unmodified by local packaging.
 - Worker packaging and app startup must be covered by the local Windows build and its smoke checks.
-- The GitHub workflow must complete all three platform jobs and publish all three uniquely named assets to v1.9.0.
+- The GitHub workflow must complete all three platform jobs and publish all three uniquely named assets to v1.9.1.
 - The staged changes must include the prepared application and documentation but no cookies, settings, logs, or build output.
+
+## Rulings
+
+- **Ruling:** Release as v1.9.1 because the v1.9.0 tag and release already exist on GitHub; reusing v1.9.0 would collide with the published release. **Cost if wrong:** the patch version would differ from a separately intended release number.
+
+## Review findings
+
+- Fixed the compact Organize summary grid overflow by ending each row after the configured column count. The new `organizer_summary_wraps_counts_at_compact_width` regression test failed before the fix and passed after it.
+- After the fix, all 69 Rust tests passed, as did Rust formatting and Clippy. The version-bumped Windows package run passed all 98 Python tests, packaged-worker smoke, and app startup/exit; the updated Rust release executable also passed the startup/exit smoke check.
 
 ---
 
@@ -39,7 +48,7 @@
 - Review: `.gitignore`, `.github/workflows/build.yml`, `build.bat`
 
 - [x] **Step 1: Confirm the release candidate and artifact exclusions.** Verify the pending Rust UI files are within the release scope and the cookie, settings, logs, and current `build/` and `dist/` trees remain ignored.
-- [x] **Step 2: Set the shared application version to 1.9.0** in Python, Cargo, Cargo.lock, and README.
+- [x] **Step 2: Set the shared application version to 1.9.1** in Python, Cargo, Cargo.lock, and README.
 - [x] **Step 3: Run the app-version check and `git diff --check`.** Expected: all app versions match and the whitespace check exits successfully.
 - [x] **Step 4: Review the README and `.gitignore` against the current app and isolated build flow.** Keep or correct their existing prepared updates; document only behavior present in the release candidate.
 
@@ -66,5 +75,5 @@
 - Verify: `.github/workflows/build.yml`
 
 - [ ] **Step 1: Follow the Actions run for the pushed commit to a terminal result.** Expected: Windows, Linux, and macOS matrix jobs all succeed.
-- [ ] **Step 2: Inspect GitHub release v1.9.0.** Expected: it contains `TrainsDownloader-windows.exe`, `TrainsDownloader-linux`, and `TrainsDownloader-macos`.
+- [ ] **Step 2: Inspect GitHub release v1.9.1.** Expected: it contains `TrainsDownloader-windows.exe`, `TrainsDownloader-linux`, and `TrainsDownloader-macos`.
 - [ ] **Step 3: Record local verification, commit SHA, workflow run, and asset results in this plan.**

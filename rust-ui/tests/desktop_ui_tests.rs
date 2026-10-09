@@ -12,7 +12,8 @@ use eframe::egui::{self, Vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 use trains_com_downloader::{
     app::{TrainsApp, UnavailableWorker},
-    model::{AppPage, JobOutcome},
+    model::{AppPage, JobOutcome, LogLevel},
+    settings::Settings,
     tray::{TrayAction, TrayController},
     worker::WorkerEvent,
 };
@@ -210,6 +211,21 @@ fn assert_layout(harness: &mut Harness<'static, TrainsApp>, width: f32, height: 
         );
     }
 
+    let header_controls = [
+        ("Dark mode", harness.get_by_label("Dark mode").rect()),
+        ("Account", harness.get_by_label("Account").rect()),
+    ];
+    assert_in_bounds(&header_controls, width, height);
+    assert_disjoint(&header_controls);
+
+    let navigation_controls = [
+        ("Magazines", harness.get_by_label("Magazines").rect()),
+        ("Track Plans", harness.get_by_label("Track Plans").rect()),
+        ("Organize", harness.get_by_label("Organize").rect()),
+    ];
+    assert_in_bounds(&navigation_controls, width, height);
+    assert_disjoint(&navigation_controls);
+
     let magazine_action = harness.get_by_label("Download selected magazines").rect();
     assert!(magazine_action.max.x <= width && magazine_action.max.y <= height);
     let magazine_heading = harness.get_by_label("Magazine archive").rect();
@@ -223,10 +239,21 @@ fn assert_layout(harness: &mut Harness<'static, TrainsApp>, width: f32, height: 
     );
     let activity_filter = harness.get_by_label("Filter activity").rect();
     assert!(activity_filter.max.x <= width && activity_filter.max.y <= height);
+    let activity_controls = [
+        ("Filter activity", activity_filter),
+        ("Copy errors", harness.get_by_label("Copy errors").rect()),
+        (
+            "Clear activity",
+            harness.get_by_label("Clear activity").rect(),
+        ),
+    ];
+    assert_in_bounds(&activity_controls, width, height);
+    assert_disjoint(&activity_controls);
     let activity_resize = harness.get_by_label("Resize Activity").rect();
     assert!(activity_resize.max.x <= width && activity_resize.max.y <= height);
 
     harness.get_by_label("Track Plans").click();
+    harness.run();
     harness.run();
     let track_action = harness.get_by_label("Download all track plans").rect();
     assert!(track_action.max.x <= width && track_action.max.y <= height);
@@ -242,6 +269,7 @@ fn assert_layout(harness: &mut Harness<'static, TrainsApp>, width: f32, height: 
 
     harness.get_by_label("Organize").click();
     harness.run();
+    harness.run();
     let organize_action = harness.get_by_label("Organize PDFs").rect();
     assert!(organize_action.max.x <= width && organize_action.max.y <= height);
     let organize_heading = harness.get_by_label("PDF organizer").rect();
@@ -253,6 +281,26 @@ fn assert_layout(harness: &mut Harness<'static, TrainsApp>, width: f32, height: 
         (organize_heading.min.x - organize_action.min.x).abs() <= 2.0,
         "organize content and action should share a left inset: {organize_heading:?} vs {organize_action:?}"
     );
+}
+
+fn assert_in_bounds(controls: &[(&str, egui::Rect)], width: f32, height: f32) {
+    for (label, rect) in controls {
+        assert!(
+            rect.min.x >= 0.0 && rect.min.y >= 0.0 && rect.max.x <= width && rect.max.y <= height,
+            "{label} is outside {width}x{height}: {rect:?}"
+        );
+    }
+}
+
+fn assert_disjoint(controls: &[(&str, egui::Rect)]) {
+    for (index, (first_label, first_rect)) in controls.iter().enumerate() {
+        for (second_label, second_rect) in controls.iter().skip(index + 1) {
+            assert!(
+                !first_rect.intersects(*second_rect),
+                "{first_label} overlaps {second_label}: {first_rect:?} and {second_rect:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -280,11 +328,143 @@ fn desktop_layout_640x480() {
 
     assert_eq!(harness.state().active_page(), AppPage::Magazines);
     assert_layout(&mut harness, 640.0, 480.0);
-    let activity_resize = harness.get_by_label("Resize Activity").rect();
+}
+
+#[test]
+fn compact_work_area_controls_and_descriptions_stay_within_window() {
+    const WIDTH: f32 = 800.0;
+    let temp = tempfile::tempdir().expect("temporary app data root");
+    let mut harness = harness(temp.path().to_path_buf(), Vec2::new(WIDTH, 620.0));
+
+    for label in ["Select all", "Clear all"] {
+        let bounds = harness.get_by_label(label).rect();
+        assert!(
+            bounds.min.x >= 0.0 && bounds.max.x <= WIDTH,
+            "magazine control {label} exceeds the compact window: {bounds:?}"
+        );
+    }
+
+    harness.get_by_label("Track Plans").click();
+    harness.run();
+    let track_description = harness
+        .get_by_label(
+            "Download the plans as PDFs while keeping their original filenames and skipping files already in your archive.",
+        )
+        .rect();
     assert!(
-        activity_resize.min.y >= 330.0,
-        "short windows should cap the Activity dock to leave at least 208 px for the work area: {activity_resize:?}"
+        track_description.min.x >= 0.0 && track_description.max.x <= WIDTH,
+        "track plan description exceeds the compact window: {track_description:?}"
     );
+
+    harness.get_by_label("Organize").click();
+    harness.run();
+    for label in ["Source folder", "Archive destination"] {
+        let bounds = harness.get_by_label(label).rect();
+        assert!(
+            bounds.min.x >= 0.0 && bounds.max.x <= WIDTH,
+            "organizer field {label} exceeds the compact window: {bounds:?}"
+        );
+    }
+}
+
+#[test]
+fn dark_mode_toggle_is_accessible_and_persists() {
+    let temp = tempfile::tempdir().expect("temporary app data root");
+    let mut harness = harness(temp.path().to_path_buf(), Vec2::new(800.0, 620.0));
+    assert!(!harness.state().settings().dark_mode);
+
+    harness.get_by_label("Dark mode").click();
+    harness.run();
+
+    assert!(harness.state().settings().dark_mode);
+    assert!(Settings::load(temp.path()).settings.dark_mode);
+    assert_layout(&mut harness, 800.0, 620.0);
+}
+
+#[test]
+fn account_window_fits_supported_desktop_sizes_in_both_themes() {
+    for size in [
+        Vec2::new(640.0, 480.0),
+        Vec2::new(800.0, 620.0),
+        Vec2::new(1440.0, 900.0),
+    ] {
+        for dark_mode in [false, true] {
+            let temp = tempfile::tempdir().expect("temporary app data root");
+            let mut harness = harness(temp.path().to_path_buf(), size);
+            harness.state_mut().settings_mut().dark_mode = dark_mode;
+            harness.get_by_label("Account").click();
+            harness.run();
+
+            let controls = [
+                (
+                    "Cookie file path",
+                    harness.get_by_label("Cookie file path").rect(),
+                ),
+                ("Choose file…", harness.get_by_label("Choose file…").rect()),
+                (
+                    "Save settings",
+                    harness.get_by_label("Save settings").rect(),
+                ),
+                ("Close", harness.get_by_label("Close").rect()),
+            ];
+            assert_in_bounds(&controls, size.x, size.y);
+            assert_disjoint(&controls);
+        }
+    }
+}
+
+#[test]
+fn running_state_controls_fit_without_overlap_in_both_themes_and_sizes() {
+    for size in [
+        Vec2::new(640.0, 480.0),
+        Vec2::new(800.0, 620.0),
+        Vec2::new(1440.0, 900.0),
+    ] {
+        for dark_mode in [false, true] {
+            let temp = tempfile::tempdir().expect("temporary app data root");
+            let mut harness = harness(temp.path().to_path_buf(), size);
+            harness.state_mut().settings_mut().dark_mode = dark_mode;
+            harness.state_mut().apply_worker_event(WorkerEvent::Started);
+            harness
+                .state_mut()
+                .apply_worker_event(WorkerEvent::Progress {
+                    done: Some(5),
+                    total: Some(24),
+                    message: Some("Downloading Model Railroader issues".to_owned()),
+                    per_magazine: None,
+                });
+            harness.state_mut().apply_worker_event(WorkerEvent::Log {
+                level: LogLevel::Info,
+                message: "Downloaded Model Railroader 2026-10".to_owned(),
+            });
+            harness.run();
+
+            assert_eq!(harness.state().job_state().outcome, JobOutcome::Running);
+            let running_controls = [
+                (
+                    "Download selected magazines",
+                    harness.get_by_label("Download selected magazines").rect(),
+                ),
+                (
+                    "Collapse Activity",
+                    harness.get_by_label("Collapse Activity").rect(),
+                ),
+                ("Stop job", harness.get_by_label("Stop job").rect()),
+                (
+                    "Filter activity",
+                    harness.get_by_label("Filter activity").rect(),
+                ),
+                ("Copy errors", harness.get_by_label("Copy errors").rect()),
+                (
+                    "Clear activity",
+                    harness.get_by_label("Clear activity").rect(),
+                ),
+            ];
+            assert_in_bounds(&running_controls, size.x, size.y);
+            assert_disjoint(&running_controls);
+            assert_layout(&mut harness, size.x, size.y);
+        }
+    }
 }
 
 #[test]

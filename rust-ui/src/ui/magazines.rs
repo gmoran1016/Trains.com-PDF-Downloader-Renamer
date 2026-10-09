@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use eframe::egui::{self, Button, Color32, Frame, RichText, Stroke};
+use eframe::egui::{self, Button, Frame, RichText, Stroke};
 use serde_json::json;
 
 use crate::{
@@ -61,17 +61,18 @@ pub fn build_request(settings: &Settings, job_id: String) -> WorkerRequest {
 }
 
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
+    let colors = theme::palette(app.settings().dark_mode);
     ui.add_space(20.0);
     ui.horizontal(|ui| {
-        ui.heading(RichText::new("Magazine archive").size(28.0));
-        ui.label(RichText::new("5 publications").small().color(theme::MUTED));
+        ui.heading("Magazine archive");
+        ui.label(RichText::new("5 publications").small().color(colors.muted));
     });
     ui.label("Choose the publications and issue range for your local archive.");
     ui.add_space(12.0);
 
-    section(ui, "Publications", |ui| {
+    section(ui, "Publications", colors, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Select the titles to include").color(theme::MUTED));
+            ui.label(RichText::new("Select the titles to include").color(colors.muted));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Clear all").clicked() {
                     app.settings_mut().selected_magazines.clear();
@@ -95,21 +96,23 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
                 .iter()
                 .any(|name| name == magazine.name);
             let row_fill = if selected {
-                Color32::from_rgb(255, 252, 241)
+                colors.selected_fill
             } else {
-                theme::SURFACE
+                colors.surface
             };
             Frame::new()
                 .fill(row_fill)
-                .stroke(Stroke::new(1.0, theme::LINE))
-                .inner_margin(egui::Margin::symmetric(10, 5))
+                .stroke(Stroke::new(
+                    1.0,
+                    if selected {
+                        colors.index_yellow
+                    } else {
+                        colors.line
+                    },
+                ))
+                .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("▌").color(if selected {
-                            theme::INDEX_YELLOW
-                        } else {
-                            theme::SURFACE
-                        }));
                         let mut checked = selected;
                         if ui.checkbox(&mut checked, magazine.name).changed() {
                             let titles = &mut app.settings_mut().selected_magazines;
@@ -123,14 +126,14 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
                             app.save_settings_notice();
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(RichText::new(magazine.schedule).small().color(theme::MUTED));
+                            ui.label(RichText::new(magazine.schedule).small().color(colors.muted));
                             ui.add_space(12.0);
                             ui.label(
                                 RichText::new(magazine.prefix)
                                     .monospace()
                                     .small()
                                     .strong()
-                                    .color(theme::BLUE),
+                                    .color(colors.blue),
                             );
                         });
                     });
@@ -139,7 +142,7 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
     });
 
     ui.add_space(12.0);
-    section(ui, "Destination", |ui| {
+    section(ui, "Destination", colors, |ui| {
         folder_row(
             app,
             ui,
@@ -150,35 +153,50 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
         ui.label(
             RichText::new("Existing files are checked before downloads are resumed.")
                 .small()
-                .color(theme::MUTED),
+                .color(colors.muted),
         );
     });
 
     ui.add_space(12.0);
-    section(ui, "Download options", |ui| {
-        egui::Grid::new("magazine_options")
-            .num_columns(2)
-            .spacing([24.0, 7.0])
-            .show(ui, |ui| {
-                checkbox(app, ui, "Newest issues first", |settings| {
-                    &mut settings.newest_first
-                });
-                checkbox(app, ui, "Include special issues", |settings| {
-                    &mut settings.include_specials
-                });
-                ui.end_row();
-                checkbox(app, ui, "Test mode (first 3 archive pages)", |settings| {
-                    &mut settings.test_mode
-                });
-                checkbox(app, ui, "Keep browser hidden", |settings| {
-                    &mut settings.headless
-                });
-                ui.end_row();
+    section(ui, "Download options", colors, |ui| {
+        if ui.available_width() < 700.0 {
+            checkbox(app, ui, "Newest issues first", |settings| {
+                &mut settings.newest_first
             });
+            checkbox(app, ui, "Include special issues", |settings| {
+                &mut settings.include_specials
+            });
+            checkbox(app, ui, "Test mode (first 3 archive pages)", |settings| {
+                &mut settings.test_mode
+            });
+            checkbox(app, ui, "Keep browser hidden", |settings| {
+                &mut settings.headless
+            });
+        } else {
+            egui::Grid::new("magazine_options")
+                .num_columns(2)
+                .spacing([24.0, 10.0])
+                .show(ui, |ui| {
+                    checkbox(app, ui, "Newest issues first", |settings| {
+                        &mut settings.newest_first
+                    });
+                    checkbox(app, ui, "Include special issues", |settings| {
+                        &mut settings.include_specials
+                    });
+                    ui.end_row();
+                    checkbox(app, ui, "Test mode (first 3 archive pages)", |settings| {
+                        &mut settings.test_mode
+                    });
+                    checkbox(app, ui, "Keep browser hidden", |settings| {
+                        &mut settings.headless
+                    });
+                    ui.end_row();
+                });
+        }
     });
 
     ui.add_space(12.0);
-    section(ui, "Local cache", |ui| {
+    section(ui, "Local cache", colors, |ui| {
         ui.horizontal_wrapped(|ui| {
             ui.label("Clear resume progress and the saved special-issue list.");
             if ui
@@ -192,33 +210,40 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
 }
 
 pub(crate) fn show_action(app: &mut TrainsApp, ui: &mut egui::Ui) {
+    let colors = theme::palette(app.settings().dark_mode);
     ui.horizontal(|ui| {
         let enabled = !app.settings().selected_magazines.is_empty() && app.can_start_job();
         let button = Button::new(
             RichText::new("Download selected magazines")
                 .strong()
-                .color(theme::PRIMARY_ACTION_TEXT),
+                .color(colors.primary_action_text),
         )
-        .fill(theme::NAVY)
+        .fill(colors.navy)
         .stroke(Stroke::NONE)
         .min_size(egui::vec2(252.0, 42.0));
         if ui.add_enabled(enabled, button).clicked() {
             app.queue_magazines();
         }
-        if let Some(notice) = app.notice() {
-            ui.label(RichText::new(notice).small().color(theme::MUTED));
-        }
     });
 }
 
-fn section(ui: &mut egui::Ui, title: &str, content: impl FnOnce(&mut egui::Ui)) {
+fn section(
+    ui: &mut egui::Ui,
+    title: &str,
+    colors: &theme::Palette,
+    content: impl FnOnce(&mut egui::Ui),
+) {
     Frame::group(ui.style())
-        .fill(theme::SURFACE)
-        .stroke(Stroke::new(1.0, theme::LINE))
-        .inner_margin(egui::Margin::same(14))
+        .fill(colors.surface)
+        .stroke(Stroke::new(1.0, colors.line))
+        .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
-            ui.label(RichText::new(title).strong().color(theme::NAVY));
-            ui.add_space(5.0);
+            ui.label(
+                RichText::new(title)
+                    .text_style(egui::TextStyle::Button)
+                    .color(colors.blue),
+            );
+            ui.add_space(7.0);
             content(ui);
         });
 }

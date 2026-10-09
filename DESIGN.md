@@ -13,34 +13,36 @@ This is an **Operate** surface. Magazines, Track Plans, and Organize have equal 
 | Navy | `#1E385B` | Navigation rail and primary actions |
 | Deep navy | `#172C48` | Strong text on pale selected navigation |
 | Blue | `#2C5B8B` | Section labels and running state |
-| Ink | `#1D2B3A` | Main text |
-| Muted blue-gray | `#5C6D7E` | Supporting text |
-| Canvas | `#EFF4F7` | Main work surface |
+| Ink | `#192735` | Main text |
+| Muted blue-gray | `#4C5E6F` | Supporting text |
+| Canvas | `#F2F6F9` | Main work surface |
 | Surface | `#FFFFFF` | Header, panels, and activity |
 | Index yellow | `#FFCD40` | Selected index mark and key emphasis |
-| Line | `#D5DEE5` | Panel and control boundaries |
-| Success | `#28734F` | Completed jobs |
-| Warning | `#9B5B10` | Warnings and cancellation |
-| Warning surface | `#FFF6E1` | Warning message background |
-| Failure | `#AF423F` | Failed jobs and errors |
+| Line | `#CBD7E0` | Panel and control boundaries |
+| Success | `#226946` | Completed jobs |
+| Warning | `#7D4B0A` | Warnings and cancellation |
+| Warning surface | `#FFF5DA` | Warning message background |
+| Failure | `#A33431` | Failed jobs and errors |
 | Primary action text | `#FFFFFF` | Text on navy primary actions |
 
-Hover, active, selected-row, selected-navigation, and rail text treatments use pale blue or warm yellow tints from the shared theme and shell. Status labels and symbols accompany semantic color. The warning text token was darkened after the finish review found insufficient contrast; the Rust theme test checks it against the canvas, surface, and warning surface.
+Hover, active, selected-row, selected-navigation, and rail text treatments use pale blue or warm yellow tints from the shared theme and shell. Status labels and symbols accompany semantic color. Theme tests check body, muted, status, navigation, and primary-action contrast against the surfaces where each appears.
+
+Dark mode keeps the index yellow and navy identity while replacing the cool white work surface with a deep blue-gray canvas. It uses `#111B26` canvas, `#1B2835` panels, `#ECF2F7` main text, and `#BDCAD5` secondary text. Status colors lighten for dark surfaces and are tested separately. The header's Dark mode checkbox switches immediately and saves the preference in `settings.json`; older settings default to light mode.
 
 ## Typography
 
-The Rust UI uses egui's proportional sans-serif family. With the shipped epaint 0.36.2 defaults, this resolves to the bundled Ubuntu Light font across the supported desktop systems; the app does not load a different system font per OS. The title is 20 px and work-area headings are 28 px. Small labels support compact issue and publication metadata. Numeric values stay in aligned rows or grid columns; the current eframe theme does not request tabular numeral glyphs.
+The UI bundles Source Sans 3 Regular and Semibold under its SIL Open Font License. Body and button text are 16 pt, compact labels are 14 pt, work-area headings are 26 pt, and the app title is 20 pt. Buttons and headings use the Semibold face; issue metadata remains Regular. No control, status, or navigation label uses text below 14 pt. Numeric values stay in aligned rows or grid columns.
 
 ## Layout and spacing
 
 - Minimum client size: 640 × 480 px.
-- Navigation rail: 208 px wide at wider sizes and 156 px below 1000 px.
+- Navigation rail: 208 px wide at 1000 px and wider; 156 px below 1000 px. The compact rail hides its brand and footer so all three work areas remain visible above Activity.
 - Header and sticky workflow action area: 64 px each.
 - Work-area content shares a 20 px horizontal inset with the sticky workflow actions, has a 980 px maximum width, and scrolls vertically in smaller windows.
-- Activity: 190 px default height, 112–340 px expanded range, 48 px collapsed strip. In short windows, the expanded dock is capped to preserve at least 208 px for the work area after the header and workflow actions.
-- Theme item spacing: 10 × 9 px; button padding: 13 × 8 px.
+- Activity: 220 px default height, 128–340 px expanded range, 48 px collapsed strip. In short windows, the expanded dock is capped to preserve at least 144 px for the scrollable work area after the header and workflow actions.
+- Theme item spacing: 12 × 10 px; button padding: 15 × 10 px; interactive controls target at least 40 px.
 
-At 640 × 480, the navigation rail uses its compact width, the work-area heading remains visible above the pinned action, and longer forms scroll. Activity stays visible and yields height to preserve a useful work area. The layout avoids horizontal scrolling and keeps the primary action anchored above Activity.
+At 640 × 480, the compact navigation keeps all three work areas visible, the page heading remains above its pinned action, and the work area scrolls vertically. Activity yields height to the main task view and keeps its status, filter, and stop controls within the window. The layout avoids horizontal scrolling and keeps the primary action anchored above Activity.
 
 ## Interaction and state
 
@@ -48,4 +50,4 @@ Use the standard controls provided by egui/eframe, including buttons, checkboxes
 
 ## Review evidence
 
-The saved native eframe captures are [wide](.impeccable/review/desktop-wide-1440x900.png) at 1440 × 900 and [compact](.impeccable/review/desktop-compact-800x620.png) at 800 × 620. They predate the 640 × 480 minimum-window adaptation, the shared work-area inset, and the final text-contrast adjustments. Geometry is covered by the desktop UI harness at 640 × 480, 800 × 620, and 1440 × 900; these checks do not replace a fresh native-window capture. No web detector ran because this is a native Rust UI with no HTML/CSS surface.
+The desktop UI harness checks idle and running layouts at 640 × 480, 800 × 620, and 1440 × 900 in both themes, including account controls, navigation, Activity actions, workflow action bounds, and compact-width controls. Fresh native-window captures are kept with the UI review evidence. No web detector runs because this is a native Rust UI with no HTML/CSS surface.

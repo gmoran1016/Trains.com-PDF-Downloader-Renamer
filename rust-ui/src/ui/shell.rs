@@ -1,4 +1,4 @@
-use eframe::egui::{self, Button, Color32, Frame, RichText, Stroke, Vec2};
+use eframe::egui::{self, Button, Frame, RichText, Stroke, Vec2};
 
 use crate::{
     app::{CloseChoice, TrainsApp},
@@ -8,46 +8,47 @@ use crate::{
 
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let compact = ui.available_width() < 1000.0;
-    crate::ui::activity::show(app, ui, ctx);
-    show_titlebar(app, ui);
-    show_navigation(app, ui, compact);
+    let colors = theme::palette(app.settings().dark_mode);
+    let navigation_width = if compact { 156.0 } else { 208.0 };
+    crate::ui::activity::show(app, ui, ctx, navigation_width, |app, ui| {
+        match app.active_page() {
+            AppPage::Magazines => crate::ui::magazines::show_action(app, ui),
+            AppPage::TrackPlans => crate::ui::track_plans::show_action(app, ui),
+            AppPage::Organize => crate::ui::organize::show_action(app, ui),
+        }
+    });
+    show_titlebar(app, ui, colors);
+    show_navigation(app, ui, compact, colors);
+
     egui::CentralPanel::default()
-        .frame(Frame::new().fill(theme::CANVAS))
+        .frame(Frame::new().fill(colors.canvas))
         .show(ui, |ui| {
             if let Some(error) = app.settings_error() {
                 Frame::new()
-                    .fill(theme::WARNING_SURFACE)
-                    .stroke(Stroke::new(1.0, theme::WARNING))
+                    .fill(colors.warning_surface)
+                    .stroke(Stroke::new(1.0, colors.warning))
                     .inner_margin(10.0)
                     .show(ui, |ui| {
-                        ui.label(RichText::new(error).color(theme::WARNING));
+                        ui.label(RichText::new(error).color(colors.warning));
                     });
                 ui.add_space(8.0);
             }
-
-            egui::Panel::bottom("workflow_actions")
-                .exact_size(64.0)
-                .frame(
-                    Frame::new()
-                        .fill(theme::SURFACE)
-                        .stroke(Stroke::new(1.0, theme::LINE))
-                        .inner_margin(egui::Margin::symmetric(20, 9)),
-                )
-                .show(ui, |ui| match app.active_page() {
-                    AppPage::Magazines => crate::ui::magazines::show_action(app, ui),
-                    AppPage::TrackPlans => crate::ui::track_plans::show_action(app, ui),
-                    AppPage::Organize => crate::ui::organize::show_action(app, ui),
-                });
+            if let Some(notice) = app.notice() {
+                ui.label(RichText::new(notice).small().color(colors.muted));
+                ui.add_space(4.0);
+            }
 
             Frame::new()
-                .fill(theme::CANVAS)
+                .fill(colors.canvas)
                 .inner_margin(egui::Margin::symmetric(20, 0))
                 .show(ui, |ui| {
+                    let page_width = (ui.available_width() - 12.0).min(980.0);
                     egui::ScrollArea::vertical()
                         .id_salt("work_area_scroll")
+                        .max_width(page_width)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui.set_max_width(980.0);
+                            ui.set_max_width(page_width);
                             match app.active_page() {
                                 AppPage::Magazines => crate::ui::magazines::show(app, ui),
                                 AppPage::TrackPlans => crate::ui::track_plans::show(app, ui),
@@ -57,43 +58,46 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui, ctx: &egui::Context) 
                 });
         });
     crate::ui::account::show(app, ctx);
-    show_cache_confirmation_window(app, ctx);
-    show_close_confirmation_window(app, ctx);
+    show_cache_confirmation_window(app, ctx, colors);
+    show_close_confirmation_window(app, ctx, colors);
 }
 
-fn show_titlebar(app: &mut TrainsApp, ui: &mut egui::Ui) {
+fn show_titlebar(app: &mut TrainsApp, ui: &mut egui::Ui, colors: &theme::Palette) {
     egui::Panel::top("titlebar")
         .exact_size(64.0)
         .frame(
             Frame::new()
-                .fill(theme::SURFACE)
-                .stroke(Stroke::new(1.0, theme::LINE))
+                .fill(colors.surface)
+                .stroke(Stroke::new(1.0, colors.line))
                 .inner_margin(egui::Margin::symmetric(22, 10)),
         )
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Trains.com Archive").size(20.0).strong());
                 ui.add_space(12.0);
-                state_marker(ui, app.job_state().outcome);
-                ui.label(RichText::new(app.job_state().outcome.label()).color(theme::MUTED));
+                state_marker(ui, app.job_state().outcome, colors);
+                ui.label(RichText::new(app.job_state().outcome.label()).color(colors.muted));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(
                             Button::new(RichText::new("Account").strong())
-                                .fill(theme::CANVAS)
-                                .stroke(Stroke::new(1.0, theme::LINE)),
+                                .fill(colors.canvas)
+                                .stroke(Stroke::new(1.0, colors.line)),
                         )
                         .clicked()
                     {
                         app.set_account_open(true);
                     }
-                    ui.label(RichText::new("Shared settings").small().color(theme::MUTED));
+                    let mut dark_mode = app.settings().dark_mode;
+                    if ui.checkbox(&mut dark_mode, "Dark mode").changed() {
+                        app.set_dark_mode(dark_mode);
+                    }
                 });
             });
         });
 }
 
-fn show_navigation(app: &mut TrainsApp, ui: &mut egui::Ui, compact: bool) {
+fn show_navigation(app: &mut TrainsApp, ui: &mut egui::Ui, compact: bool, colors: &theme::Palette) {
     let width = if compact { 156.0 } else { 208.0 };
     let mut selected = None;
     egui::Panel::left("primary_navigation")
@@ -101,28 +105,65 @@ fn show_navigation(app: &mut TrainsApp, ui: &mut egui::Ui, compact: bool) {
         .resizable(false)
         .frame(
             Frame::new()
-                .fill(theme::NAVY)
-                .inner_margin(egui::Margin::symmetric(if compact { 10 } else { 16 }, 18)),
+                .fill(colors.navy_dark)
+                .inner_margin(egui::Margin::symmetric(
+                    if compact { 10 } else { 16 },
+                    if compact { 4 } else { 18 },
+                )),
         )
         .show(ui, |ui| {
+            if compact {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (index, page) in AppPage::ALL.into_iter().enumerate() {
+                    let is_selected = app.active_page() == page;
+                    let fill = if is_selected {
+                        colors.selected_fill
+                    } else {
+                        colors.navy_dark
+                    };
+                    let ink = if is_selected {
+                        colors.selected_ink
+                    } else {
+                        colors.rail_ink
+                    };
+                    let response = ui.add_sized(
+                        Vec2::new(ui.available_width(), 40.0),
+                        Button::new(RichText::new(page.label()).strong().color(ink))
+                            .fill(fill)
+                            .stroke(if is_selected {
+                                Stroke::new(1.0, colors.index_yellow)
+                            } else {
+                                Stroke::NONE
+                            }),
+                    );
+                    if response.clicked() {
+                        selected = Some(page);
+                    }
+                    if index + 1 < AppPage::ALL.len() {
+                        ui.add_space(3.0);
+                    }
+                }
+                return;
+            }
+
             ui.horizontal(|ui| {
                 Frame::new()
-                    .fill(theme::INDEX_YELLOW)
+                    .fill(colors.index_yellow)
                     .inner_margin(egui::Margin::symmetric(7, 3))
                     .show(ui, |ui| {
-                        ui.label(RichText::new("A").strong().color(theme::NAVY_DARK));
+                        ui.label(RichText::new("A").strong().color(colors.navy_dark));
                     });
                 ui.vertical(|ui| {
                     ui.label(
                         RichText::new("TRAINS.COM")
                             .small()
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(colors.rail_ink),
                     );
                     ui.label(
                         RichText::new("Archive index")
                             .small()
-                            .color(Color32::from_rgb(205, 217, 228)),
+                            .color(colors.rail_muted),
                     );
                 });
             });
@@ -131,28 +172,28 @@ fn show_navigation(app: &mut TrainsApp, ui: &mut egui::Ui, compact: bool) {
                 RichText::new("WORK AREAS")
                     .small()
                     .strong()
-                    .color(Color32::from_rgb(190, 207, 221)),
+                    .color(colors.rail_muted),
             );
             ui.add_space(8.0);
 
             for page in AppPage::ALL {
                 let is_selected = app.active_page() == page;
                 let fill = if is_selected {
-                    Color32::from_rgb(255, 250, 230)
+                    colors.selected_fill
                 } else {
-                    theme::NAVY
+                    colors.navy_dark
                 };
                 let ink = if is_selected {
-                    theme::NAVY_DARK
+                    colors.selected_ink
                 } else {
-                    Color32::WHITE
+                    colors.rail_ink
                 };
                 let response = ui.add_sized(
                     Vec2::new(ui.available_width(), 46.0),
                     Button::new(RichText::new(page.label()).strong().color(ink))
                         .fill(fill)
                         .stroke(if is_selected {
-                            Stroke::new(1.0, theme::INDEX_YELLOW)
+                            Stroke::new(1.0, colors.index_yellow)
                         } else {
                             Stroke::NONE
                         }),
@@ -167,13 +208,15 @@ fn show_navigation(app: &mut TrainsApp, ui: &mut egui::Ui, compact: bool) {
                 ui.label(
                     RichText::new("Local PDF archive")
                         .small()
-                        .color(Color32::from_rgb(205, 217, 228)),
+                        .color(colors.rail_muted),
                 );
-                ui.label(
-                    RichText::new("Windows · Linux · macOS")
-                        .small()
-                        .color(Color32::from_rgb(157, 178, 197)),
-                );
+                if !compact {
+                    ui.label(
+                        RichText::new("Windows · Linux · macOS")
+                            .small()
+                            .color(colors.rail_subtle),
+                    );
+                }
             });
         });
     if let Some(page) = selected {
@@ -181,19 +224,23 @@ fn show_navigation(app: &mut TrainsApp, ui: &mut egui::Ui, compact: bool) {
     }
 }
 
-fn state_marker(ui: &mut egui::Ui, outcome: JobOutcome) {
+fn state_marker(ui: &mut egui::Ui, outcome: JobOutcome, colors: &theme::Palette) {
     let (symbol, color) = match outcome {
-        JobOutcome::Idle => ("○", theme::MUTED),
-        JobOutcome::Running => ("●", theme::BLUE),
-        JobOutcome::Success => ("✓", theme::SUCCESS),
-        JobOutcome::NoResults => ("–", theme::MUTED),
-        JobOutcome::Failed => ("!", theme::FAILURE),
-        JobOutcome::Cancelled => ("Ⅱ", theme::WARNING),
+        JobOutcome::Idle => ("○", colors.muted),
+        JobOutcome::Running => ("●", colors.blue),
+        JobOutcome::Success => ("✓", colors.success),
+        JobOutcome::NoResults => ("–", colors.muted),
+        JobOutcome::Failed => ("!", colors.failure),
+        JobOutcome::Cancelled => ("Ⅱ", colors.warning),
     };
     ui.label(RichText::new(symbol).strong().color(color));
 }
 
-fn show_cache_confirmation_window(app: &mut TrainsApp, ctx: &egui::Context) {
+fn show_cache_confirmation_window(
+    app: &mut TrainsApp,
+    ctx: &egui::Context,
+    colors: &theme::Palette,
+) {
     if !app.clear_cache_confirmation() {
         return;
     }
@@ -218,9 +265,9 @@ fn show_cache_confirmation_window(app: &mut TrainsApp, ctx: &egui::Context) {
                 if ui
                     .add(
                         Button::new(
-                            RichText::new("Remove cache files").color(theme::PRIMARY_ACTION_TEXT),
+                            RichText::new("Remove cache files").color(colors.primary_action_text),
                         )
-                        .fill(theme::NAVY)
+                        .fill(colors.navy)
                         .stroke(Stroke::NONE)
                         .min_size(egui::vec2(150.0, 36.0)),
                     )
@@ -235,7 +282,11 @@ fn show_cache_confirmation_window(app: &mut TrainsApp, ctx: &egui::Context) {
     }
 }
 
-fn show_close_confirmation_window(app: &mut TrainsApp, ctx: &egui::Context) {
+fn show_close_confirmation_window(
+    app: &mut TrainsApp,
+    ctx: &egui::Context,
+    colors: &theme::Palette,
+) {
     if !app.close_dialog_open() {
         return;
     }
@@ -272,7 +323,7 @@ fn show_close_confirmation_window(app: &mut TrainsApp, ctx: &egui::Context) {
                         "The system tray is unavailable; Stop & Quit or Cancel remains available.",
                     )
                     .small()
-                    .color(theme::MUTED),
+                    .color(colors.muted),
                 );
             }
         });

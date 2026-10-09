@@ -1,7 +1,11 @@
 use std::path::Path;
 
 use eframe::egui;
-use trains_com_downloader::{app::TrainsApp, model::AppPage, worker::FakeWorkerLauncher};
+use trains_com_downloader::{
+    app::TrainsApp,
+    model::{AppPage, LogLevel},
+    worker::{FakeWorkerLauncher, WorkerEvent},
+};
 
 fn parse_dimension(value: Option<String>, fallback: f32, minimum: f32) -> f32 {
     value
@@ -23,6 +27,14 @@ fn requested_page() -> Option<AppPage> {
     }
 }
 
+fn running_scene_requested() -> bool {
+    std::env::var("TRAINS_UI_SMOKE_STATE").is_ok_and(|state| state == "running")
+}
+
+fn dark_theme_requested() -> bool {
+    std::env::var("TRAINS_UI_SMOKE_THEME").is_ok_and(|theme| theme == "dark")
+}
+
 fn configure_isolated_paths(app: &mut TrainsApp, root: &Path) {
     let settings = app.settings_mut();
     settings.base_dir = root.join("magazines").to_string_lossy().into_owned();
@@ -42,6 +54,8 @@ fn main() -> eframe::Result<()> {
     let data_dir = tempfile::tempdir().expect("create isolated smoke-test data root");
     let data_root = data_dir.path().to_path_buf();
     let page = requested_page();
+    let running_scene = running_scene_requested();
+    let dark_theme = dark_theme_requested();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -59,8 +73,26 @@ fn main() -> eframe::Result<()> {
         Box::new(move |creation_context| {
             let mut app = TrainsApp::new(data_root.clone(), Box::new(FakeWorkerLauncher));
             configure_isolated_paths(&mut app, &data_root);
+            app.settings_mut().dark_mode = dark_theme;
             if let Some(page) = page {
                 app.set_active_page(page);
+            }
+            if running_scene {
+                app.apply_worker_event(WorkerEvent::Started);
+                app.apply_worker_event(WorkerEvent::Progress {
+                    done: Some(5),
+                    total: Some(24),
+                    message: Some("Downloading Model Railroader issues".to_owned()),
+                    per_magazine: None,
+                });
+                app.apply_worker_event(WorkerEvent::Log {
+                    level: LogLevel::Info,
+                    message: "Archive scan found 24 available issues".to_owned(),
+                });
+                app.apply_worker_event(WorkerEvent::Log {
+                    level: LogLevel::Info,
+                    message: "Downloaded Model Railroader 2026-10".to_owned(),
+                });
             }
             app.install_desktop_tray(creation_context.egui_ctx.clone());
             Ok(Box::new(app))

@@ -23,32 +23,44 @@ pub fn build_request(settings: &Settings, job_id: String) -> WorkerRequest {
 }
 
 pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
+    let colors = theme::palette(app.settings().dark_mode);
     ui.add_space(20.0);
-    ui.heading(RichText::new("Track Plan archive").size(28.0));
-    ui.label(
-        "Download the plans as PDFs while keeping their original filenames and skipping files already in your archive.",
+    ui.heading("Track Plan archive");
+    ui.add(
+        egui::Label::new(
+            "Download the plans as PDFs while keeping their original filenames and skipping files already in your archive.",
+        )
+        .wrap(),
     );
     ui.add_space(14.0);
 
     Frame::group(ui.style())
-        .fill(theme::SURFACE)
-        .stroke(Stroke::new(1.0, theme::LINE))
-        .inner_margin(egui::Margin::same(16))
+        .fill(colors.surface)
+        .stroke(Stroke::new(1.0, colors.line))
+        .inner_margin(egui::Margin::same(18))
         .show(ui, |ui| {
-            ui.label(RichText::new("Source").strong().color(theme::NAVY));
-            ui.add_space(5.0);
+            ui.label(
+                RichText::new("Source")
+                    .text_style(egui::TextStyle::Button)
+                    .color(colors.blue),
+            );
+            ui.add_space(7.0);
             ui.label("Model Railroader Track Plan Database");
             ui.hyperlink_to("Open the database", TRACK_PLAN_DATABASE);
         });
 
     ui.add_space(12.0);
     Frame::group(ui.style())
-        .fill(theme::SURFACE)
-        .stroke(Stroke::new(1.0, theme::LINE))
-        .inner_margin(egui::Margin::same(16))
+        .fill(colors.surface)
+        .stroke(Stroke::new(1.0, colors.line))
+        .inner_margin(egui::Margin::same(18))
         .show(ui, |ui| {
-            ui.label(RichText::new("Destination").strong().color(theme::NAVY));
-            ui.add_space(5.0);
+            ui.label(
+                RichText::new("Destination")
+                    .text_style(egui::TextStyle::Button)
+                    .color(colors.blue),
+            );
+            ui.add_space(7.0);
             folder_row(
                 app,
                 ui,
@@ -60,24 +72,21 @@ pub(crate) fn show(app: &mut TrainsApp, ui: &mut egui::Ui) {
 }
 
 pub(crate) fn show_action(app: &mut TrainsApp, ui: &mut egui::Ui) {
+    let colors = theme::palette(app.settings().dark_mode);
     if ui
         .add_enabled(
             app.can_start_job(),
             Button::new(
                 RichText::new("Download all track plans")
                     .strong()
-                    .color(theme::PRIMARY_ACTION_TEXT),
+                    .color(colors.primary_action_text),
             )
-            .fill(theme::NAVY)
+            .fill(colors.navy)
             .stroke(Stroke::NONE)
             .min_size(egui::vec2(240.0, 42.0)),
         )
         .clicked()
     {
         app.queue_track_plans();
-    }
-    if let Some(notice) = app.notice() {
-        ui.add_space(4.0);
-        ui.label(RichText::new(notice).small().color(theme::MUTED));
     }
 }

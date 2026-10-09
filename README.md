@@ -1,6 +1,6 @@
 # Trains.com Magazine & Track Plan Downloader
 
-**v1.9.0** — A desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer.
+**v1.9.1** — A desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer.
 
 ## Download
 

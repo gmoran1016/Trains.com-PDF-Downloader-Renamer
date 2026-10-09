@@ -48,6 +48,24 @@ fn loads_existing_settings_keys() {
     assert_eq!(loaded.settings.org_dst, "D:/Library");
     assert_eq!(loaded.settings.org_prefix, "MRR");
     assert!(loaded.settings.org_headless);
+    assert!(!loaded.settings.dark_mode);
+}
+
+#[test]
+fn dark_mode_preference_round_trips_without_changing_other_settings() {
+    let data_dir = tempfile::tempdir().expect("temporary data root");
+    let mut settings = Settings::load(data_dir.path()).settings;
+    settings.base_dir = "D:/Magazine PDFs".to_owned();
+    settings.dark_mode = true;
+
+    settings
+        .save(data_dir.path())
+        .expect("save dark mode setting");
+    let loaded = Settings::load(data_dir.path());
+
+    assert_eq!(loaded.parse_error, None);
+    assert!(loaded.settings.dark_mode);
+    assert_eq!(loaded.settings.base_dir, "D:/Magazine PDFs");
 }
 
 #[test]
