@@ -66,14 +66,20 @@
 - Stage only the release candidate files verified in Tasks 1 and 2.
 
 - [x] **Step 1: Review the complete staged diff and verify no runtime or generated build data is included.**
-- [ ] **Step 2: Commit the release candidate** with a message describing the Rust desktop UI and Track Plans workflow.
-- [ ] **Step 3: Push the commit to `origin/main`**, as explicitly authorized by the user.
+- [x] **Step 2: Commit the release candidate** with a message describing the Rust desktop UI and Track Plans workflow.
+- [x] **Step 3: Push the commit to `origin/main`**, as explicitly authorized by the user.
 
 ### Task 4: Verify GitHub Actions and release assets
 
 **Files:**
 - Verify: `.github/workflows/build.yml`
 
-- [ ] **Step 1: Follow the Actions run for the pushed commit to a terminal result.** Expected: Windows, Linux, and macOS matrix jobs all succeed.
-- [ ] **Step 2: Inspect GitHub release v1.9.1.** Expected: it contains `TrainsDownloader-windows.exe`, `TrainsDownloader-linux`, and `TrainsDownloader-macos`.
-- [ ] **Step 3: Record local verification, commit SHA, workflow run, and asset results in this plan.**
+- [x] **Step 1: Follow the Actions run for the pushed commit to a terminal result.** Windows, Linux, and macOS jobs all succeeded.
+- [x] **Step 2: Inspect GitHub release v1.9.1.** It contains `TrainsDownloader-windows.exe`, `TrainsDownloader-linux`, and `TrainsDownloader-macos`.
+- [x] **Step 3: Record local verification, commit SHA, workflow run, and asset results in this plan.**
+
+### Release evidence
+
+- Release commit: `bc9ba475b2cc1e50600afb42c702bf62c9c9c50e` (`Polish Rust desktop UI and release v1.9.1`), pushed to `origin/main`.
+- GitHub Actions run [37925370805](https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/actions/runs/37925370805) completed successfully; Windows, Linux, and macOS matrix jobs all passed.
+- GitHub release [v1.9.1](https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/releases/tag/v1.9.1) contains `TrainsDownloader-windows.exe` (105,972,224 bytes), `TrainsDownloader-linux` (157,279,088 bytes), and `TrainsDownloader-macos` (86,698,160 bytes).
