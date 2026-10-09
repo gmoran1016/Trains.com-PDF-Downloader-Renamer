@@ -50,6 +50,10 @@ fn main() {
             emit(&job_id, "completed", json!({"outcome": "success"}));
             std::process::exit(7);
         }
+        "completed-delayed-close" => {
+            emit(&job_id, "completed", json!({"outcome":"success"}));
+            thread::sleep(Duration::from_millis(300));
+        }
         "completed-trailing-invalid" => {
             emit(&job_id, "completed", json!({"outcome": "success"}));
             thread::sleep(Duration::from_millis(75));

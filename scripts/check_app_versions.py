@@ -1,8 +1,9 @@
-"""Fail when the Python engine and Rust desktop release versions drift."""
+"""Fail when any desktop or Python engine release version drifts."""
 
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 import sys
 import tomllib
@@ -25,15 +26,20 @@ def app_version() -> str:
 
 def main() -> int:
     cargo = tomllib.loads((ROOT / "rust-ui" / "Cargo.toml").read_text(encoding="utf-8"))
-    rust_version = cargo["package"]["version"]
-    python_version = app_version()
-    if rust_version != python_version:
-        print(
-            f"Version mismatch: Rust package is {rust_version}; Python engine is {python_version}.",
-            file=sys.stderr,
-        )
+    ui = ROOT / "desktop-ui"
+    native = tomllib.loads((ui / "src-tauri/Cargo.toml").read_text(encoding="utf-8"))
+    versions = {
+        "Python engine": app_version(),
+        "Rust controller": cargo["package"]["version"],
+        "Rust desktop": native["package"]["version"],
+        "React UI": json.loads((ui / "package.json").read_text(encoding="utf-8"))["version"],
+        "Tauri bundle": json.loads((ui / "src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"],
+        "npm lock": json.loads((ui / "package-lock.json").read_text(encoding="utf-8"))["packages"][""]["version"],
+    }
+    if len(set(versions.values())) != 1:
+        print("Version mismatch: " + "; ".join(f"{name}: {value}" for name, value in versions.items()), file=sys.stderr)
         return 1
-    print(f"Rust UI and Python engine versions match: {rust_version}.")
+    print(f"All desktop and engine versions match: {versions['Python engine']}.")
     return 0
 
 

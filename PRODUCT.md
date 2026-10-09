@@ -8,7 +8,7 @@ adaptive
 
 ## Stack
 
-Native desktop UI built with Rust/egui/eframe for Windows, Linux, and macOS. The Impeccable schema has no desktop-native value, so `adaptive` identifies this cross-platform native surface; the app itself remains desktop-first. Retain the existing Python download and PDF-organization engine as a bundled worker over versioned JSON-lines.
+Desktop application built with Tauri 2, React, and TypeScript for Windows, Linux, and macOS. Rust owns desktop integration, settings, job lifecycle, and the worker protocol. The existing Python download and PDF-organization engine remains bundled over versioned JSON-lines. This is a desktop-first Operate surface.
 
 ## Users
 
@@ -24,7 +24,7 @@ A cross-platform desktop utility that brings authenticated magazine downloads, t
 
 ## Operating Context
 
-- Runs as a cross-platform desktop application on Windows, Linux, and macOS. The new UI is Rust/egui/eframe; the existing Python engine remains responsible for download, authentication, and PDF-organization behavior. Google Chrome is required; the matching ChromeDriver is downloaded automatically.
+- Runs as a desktop application on Windows, Linux, and macOS. Tauri renders the React interface in the platform webview; the Python worker remains responsible for download, authentication, and PDF-organization behavior. Google Chrome is required; the matching ChromeDriver is downloaded automatically. Windows portable builds require WebView2; the per-user installer provides its bootstrapper.
 - Magazine downloads require an active Trains.com subscription and access to the requested issue. On first use, the user signs in through a visible Chrome window. The app reuses saved session cookies for the magazine and track-plan workflows.
 - Users choose local magazine and track-plan folders. Settings and resumable-download state persist between sessions.
 - The built-in organizer can process an existing folder of PDFs independently of downloading.

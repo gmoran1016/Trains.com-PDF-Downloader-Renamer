@@ -2,52 +2,52 @@
 
 ## Direction
 
-The UI follows the **Annual Index** direction (seed `ee530b99`): a modern, clear archive index with cool white surfaces, deep blue navigation, a bright yellow index mark, compact issue metadata, and crisp sans-serif text. The reference is Trains.com's Model Railroader annual index; the app uses its retrieval discipline without copying the publication page or inventing coverage data.
+**Annual Index** remains the approved direction: a clear contemporary archive index with cool surfaces, blue ink, a restrained yellow selection mark, and readable sans text. It is an Operate surface: complete a task, review its outcome, then continue. Publication coverage comes only from the Python scan.
 
-This is an **Operate** surface. Magazines, Track Plans, and Organize have equal standing in the left navigation. The shared header keeps account access and current job state visible. The bottom Activity dock stays available across work areas and can be resized or collapsed.
+The Tauri replacement uses one set of controls across Magazines, Track Plans, and Organize. The header contains account and appearance settings. Navigation has no decorative brand panel or footer. Workflow actions stay below the independently scrolling form. Activity occupies a compact strip while collapsed; new installations start collapsed.
 
-## Palette
+## Tokens
 
-| Token | Value | Use |
+| Role | Light | Dark |
 |---|---|---|
-| Navy | `#1E385B` | Navigation rail and primary actions |
-| Deep navy | `#172C48` | Strong text on pale selected navigation |
-| Blue | `#2C5B8B` | Section labels and running state |
-| Ink | `#192735` | Main text |
-| Muted blue-gray | `#4C5E6F` | Supporting text |
-| Canvas | `#F2F6F9` | Main work surface |
-| Surface | `#FFFFFF` | Header, panels, and activity |
-| Index yellow | `#FFCD40` | Selected index mark and key emphasis |
-| Line | `#CBD7E0` | Panel and control boundaries |
-| Success | `#226946` | Completed jobs |
-| Warning | `#7D4B0A` | Warnings and cancellation |
-| Warning surface | `#FFF5DA` | Warning message background |
-| Failure | `#A33431` | Failed jobs and errors |
-| Primary action text | `#FFFFFF` | Text on navy primary actions |
+| Canvas | `#f5f7f9` | `#111d28` |
+| Surface | `#ffffff` | `#182633` |
+| Main text | `#182b3a` | `#edf3f7` |
+| Supporting text | `#526575` | `#b7c7d6` |
+| Blue ink | `#23486e` | `#aacdeb` |
+| Selection | `#fff4ce` | `#413c22` |
+| Boundary | `#d7e0e7` | `#344859` |
+| Failure | `#a72f36` | `#ffb2b5` |
+| Success | `#226946` | `#9bd7b8` |
+| Warning | `#80510e` | `#f1ca86` |
+| Focus | `#2874b0` | `#79b9ef` |
 
-Hover, active, selected-row, selected-navigation, and rail text treatments use pale blue or warm yellow tints from the shared theme and shell. Status labels and symbols accompany semantic color. Theme tests check body, muted, status, navigation, and primary-action contrast against the surfaces where each appears.
+Primary actions use white on `#23486e` in both themes. Status always has a label and icon. Inputs, selection, caret, focus rings, progress, and scrollbars share the palette. Native folder/file pickers and the title bar follow the operating system.
 
-Dark mode keeps the index yellow and navy identity while replacing the cool white work surface with a deep blue-gray canvas. It uses `#111B26` canvas, `#1B2835` panels, `#ECF2F7` main text, and `#BDCAD5` secondary text. Status colors lighten for dark surfaces and are tested separately. The header's Dark mode checkbox switches immediately and saves the preference in `settings.json`; older settings default to light mode.
+## Typography and assets
 
-## Typography
+Source Sans 3 Regular and Semibold are bundled locally, with the original SIL Open Font License in `desktop-ui/src/assets/SourceSans3-OFL.txt`. Body and regular controls are 16 CSS px, secondary labels 14 px, headings 28 px (25 px in compact windows), and the brand 20 px. Text remains selectable; long paths can be edited and scroll inside their input.
 
-The UI bundles Source Sans 3 Regular and Semibold under its SIL Open Font License. Body and button text are 16 pt, compact labels are 14 pt, work-area headings are 26 pt, and the app title is 20 pt. Buttons and headings use the Semibold face; issue metadata remains Regular. No control, status, or navigation label uses text below 14 pt. Numeric values stay in aligned rows or grid columns.
+The book/bookmark application icon was authored in `desktop-ui/assets/app-icon.svg`. Tauri's icon generator produces the desktop PNG, ICO, and ICNS files. Interface icons come from Lucide. No invented cover art or stock imagery is used.
 
-## Layout and spacing
+## Layout
 
-- Minimum client size: 640 × 480 px.
-- Navigation rail: 208 px wide at 1000 px and wider; 156 px below 1000 px. The compact rail hides its brand and footer so all three work areas remain visible above Activity.
-- Header and sticky workflow action area: 64 px each.
-- Work-area content shares a 20 px horizontal inset with the sticky workflow actions, has a 980 px maximum width, and scrolls vertically in smaller windows.
-- Activity: 220 px default height, 128–340 px expanded range, 48 px collapsed strip. In short windows, the expanded dock is capped to preserve at least 144 px for the scrollable work area after the header and workflow actions.
-- Theme item spacing: 12 × 10 px; button padding: 15 × 10 px; interactive controls target at least 40 px.
+- Minimum client size: 640 × 480.
+- Header: 64 px; 56 px in compact windows.
+- Navigation: 194 px; 156 px below 1000 px. Below 720 px, three equal tabs occupy a 48 px row above the workspace.
+- Form: independently scrollable, with a 1020 px maximum content width and 20–34 px horizontal inset. Sections use headings and spacing, without nested cards.
+- Workflow actions: pinned outside the scroll area. Disabled actions retain clear labels; the form explains missing inputs where space permits.
+- Activity: collapsed strip at least 54 px; expanded saved height is capped at 38% of client height (34% in compact tall windows). In short compact windows, a denser toolbar leaves at least one readable event row. Per-publication progress scrolls with the event area.
+- Dialogs: constrained to client height, with a scrollable body and a fixed action area. Escape closes; focus returns to the invoking control.
 
-At 640 × 480, the compact navigation keeps all three work areas visible, the page heading remains above its pinned action, and the work area scrolls vertically. Activity yields height to the main task view and keeps its status, filter, and stop controls within the window. The layout avoids horizontal scrolling and keeps the primary action anchored above Activity.
+The form may scroll in small windows. Navigation, primary actions, Activity toggle, and Stop remain within the client area. Expanding Activity never moves the workflow action over the form.
 
-## Interaction and state
+## Behavior
 
-Use the standard controls provided by egui/eframe, including buttons, checkboxes, text inputs, combo boxes, keyboard focus, native folder dialogs, and system-tray actions. Job state is always labeled: Ready, Running, Complete, No results, Failed, or Cancelled. Progress advances only from worker events. A partial scan remains Failed while its findings stay available; Download Missing requires a complete scan and one unambiguous magazine target.
+Job labels: Ready, Running, Complete, No results, Failed, Cancelled. Progress comes only from worker events. Stop remains available until the worker process has finished. Settings shown in the form must save before the next job starts. Failed saves remain visible and cannot silently use older options.
 
-## Review evidence
+Organizer results retain every count, missing-issue row, and full report. Failed or cancelled scans keep their findings and do not offer Download Missing. That action requires a successful complete scan, one known publication, missing issues, and the same destination. Activity retains the full session in Rust and renders 100 filtered events per page; copying errors uses the native clipboard.
 
-The desktop UI harness checks idle and running layouts at 640 × 480, 800 × 620, and 1440 × 900 in both themes, including account controls, navigation, Activity actions, workflow action bounds, and compact-width controls. Fresh native-window captures are kept with the UI review evidence. No web detector runs because this is a native Rust UI with no HTML/CSS surface.
+## Verification
+
+Playwright covers both themes at 640×480, 800×620, 1120×760, and 1440×900, the loaded font, all job outcomes, workflow option mapping, keyboard dismissal/focus, cancellation, close choices, partial findings, and Activity controls. Rust checks preserve protocol, data, worker-exit, and settings behavior. Native Windows verification and platform packaging results are recorded separately in `docs/tauri-ui-verification.md`; browser fixtures alone are not evidence that a native package works.

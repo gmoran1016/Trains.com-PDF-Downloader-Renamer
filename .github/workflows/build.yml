@@ -2,15 +2,20 @@ name: Build Desktop Applications
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the verified artifacts to GitHub Releases
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  CARGO_TARGET_DIR: build/cargo-target
+  CARGO_TARGET_DIR: ${{ github.workspace }}/build/cargo-target
 
 jobs:
   build:
@@ -19,127 +24,147 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: TrainsDownloader-windows.exe
-            cargo_binary: build/cargo-target/release/trains-com-downloader.exe
-          - os: ubuntu-latest
-            artifact: TrainsDownloader-linux
-            cargo_binary: build/cargo-target/release/trains-com-downloader
+            platform: windows
+            bundles: nsis
+          - os: ubuntu-22.04
+            platform: linux
+            bundles: appimage
           - os: macos-latest
-            artifact: TrainsDownloader-macos
-            cargo_binary: build/cargo-target/release/trains-com-downloader
-
+            platform: macos
+            bundles: dmg
     runs-on: ${{ matrix.os }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-          cache: 'pip'
-
-      - name: Set up Rust stable
-        uses: dtolnay/rust-toolchain@stable
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop-ui/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-
       - name: Install Linux desktop build libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y pkg-config libdbus-1-dev libdbus-1-3 \
-            libxcb-xinerama0 libxcb-cursor0 libxcb1 libx11-xcb1 \
-            libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1 libegl1
-
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2 \
+            libdbus-1-dev libxcb-xinerama0 libxcb-cursor0 libxcb1 libx11-xcb1 \
+            libxkbcommon-x11-0 libgl1 libegl1
       - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt pyinstaller
-
-      - name: Verify release versions match
+        run: python -m pip install -r requirements-dev.txt pyinstaller
+      - name: Install frontend dependencies
+        working-directory: desktop-ui
+        run: npm ci
+      - name: Verify all release versions
         run: python scripts/check_app_versions.py
-
       - name: Run Python engine and worker tests
-        run: python -m pytest tests/test_trains_app.py tests/test_worker_protocol.py tests/test_worker_integration.py -q
-
+        run: python -m pytest tests/ -q
       - name: Check Rust formatting
-        run: cargo fmt --manifest-path rust-ui/Cargo.toml -- --check
-
-      - name: Run Rust tests
-        run: cargo test --manifest-path rust-ui/Cargo.toml --all-targets --features "test-worker desktop-smoke"
-
-      - name: Run Rust lint checks
-        run: cargo clippy --manifest-path rust-ui/Cargo.toml --all-targets --features "test-worker desktop-smoke" -- -D warnings
-
-      - name: Prepare isolated package directories
-        shell: bash
-        run: mkdir -p build/pyinstaller-work build/pyinstaller-dist build/pyinstaller-spec
-
+        run: |
+          cargo fmt --manifest-path rust-ui/Cargo.toml -- --check
+          cargo fmt --manifest-path desktop-ui/src-tauri/Cargo.toml -- --check
+      - name: Run Rust controller and worker tests
+        run: cargo test --locked --manifest-path rust-ui/Cargo.toml --all-targets --features "test-worker desktop-smoke"
+      - name: Check Rust controller
+        run: cargo clippy --locked --manifest-path rust-ui/Cargo.toml --all-targets --features "test-worker desktop-smoke" -- -D warnings
+      - name: Build frontend
+        working-directory: desktop-ui
+        run: npm run build
+      - name: Install rendered-test browser
+        working-directory: desktop-ui
+        run: npx playwright install --with-deps chromium
+      - name: Run rendered interface and interaction tests
+        working-directory: desktop-ui
+        run: npm test
+      - name: Run desktop shell tests
+        run: cargo test --locked --manifest-path desktop-ui/src-tauri/Cargo.toml
+      - name: Check desktop shell
+        run: cargo clippy --locked --manifest-path desktop-ui/src-tauri/Cargo.toml --all-targets --features ui-qa -- -D warnings
       - name: Build bundled Python worker
         shell: bash
         run: >-
           python -m PyInstaller --noconfirm --onefile --console
           --name TrainsDownloaderWorker
-          --distpath build/pyinstaller-dist
-          --workpath build/pyinstaller-work
+          --distpath build/pyinstaller-dist --workpath build/pyinstaller-work
           --specpath build/pyinstaller-spec
           --collect-all PyQt5 --collect-all selenium --collect-all pypdf
-          --hidden-import requests --hidden-import trains_app
-          worker_main.py
-
+          --hidden-import requests --hidden-import trains_app worker_main.py
       - name: Set bundled worker path
         shell: bash
         run: |
           python - <<'PY'
-          import os
+          import os, sys
           from pathlib import Path
-          import sys
-
-          worker = Path("build/pyinstaller-dist") / ("TrainsDownloaderWorker.exe" if sys.platform == "win32" else "TrainsDownloaderWorker")
-          if not worker.is_file() or worker.stat().st_size == 0:
-              raise SystemExit(f"Worker package was not produced: {worker}")
-          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as environment:
-              environment.write(f"TRAINSDOWNLOADER_WORKER={worker.resolve()}\n")
+          worker = Path('build/pyinstaller-dist') / ('TrainsDownloaderWorker.exe' if sys.platform == 'win32' else 'TrainsDownloaderWorker')
+          if not worker.is_file() or not worker.stat().st_size:
+              raise SystemExit('The bundled worker was not produced.')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as environment:
+              environment.write(f'TRAINSDOWNLOADER_WORKER={worker.resolve()}\n')
           PY
-
       - name: Smoke-test packaged Python worker
         run: python scripts/smoke_test_worker.py
-
-      - name: Build Rust desktop application
-        run: cargo build --manifest-path rust-ui/Cargo.toml --release
-
-      - name: Copy release application
+      - name: Build desktop packages
+        working-directory: desktop-ui
+        run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+      - name: Collect release packages
         shell: bash
-        run: python -c "import shutil; shutil.copy2('${{ matrix.cargo_binary }}', '${{ matrix.artifact }}')"
+        run: python scripts/collect_desktop_packages.py --platform ${{ matrix.platform }} --target-dir build/cargo-target --output-dir dist/release
+      - name: Verify isolated Windows startup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/verify-desktop-release.ps1 -ExecutablePath dist/release/TrainsDownloader-windows.exe
+      - name: Save platform packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: dist/release/*
+          if-no-files-found: error
+      - name: Save rendered-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-evidence-${{ matrix.platform }}
+          path: desktop-ui/test-results/
+          if-no-files-found: ignore
 
-      - name: Mark Unix application executable
-        if: runner.os != 'Windows'
-        shell: bash
-        run: chmod +x "${{ matrix.artifact }}"
-
+  publish:
+    needs: build
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: dist/release
+          merge-multiple: true
       - name: Read release version
         id: version
-        shell: bash
         run: |
-          version=$(python -c 'import tomllib; print(tomllib.load(open("rust-ui/Cargo.toml", "rb"))["package"]["version"])')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Publish to GitHub Releases
-        uses: softprops/action-gh-release@v2
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          version = json.loads(Path('desktop-ui/package.json').read_text())['version']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\n')
+          PY
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
-          prerelease: false
-          files: ${{ matrix.artifact }}
+          files: dist/release/*
           body: |
-            Automatically built from the latest commit on `main`.
+            Tauri desktop interface with the retained bundled Python engine.
 
-            | Platform | Download |
-            |----------|----------|
-            | Windows  | `TrainsDownloader-windows.exe` → run directly |
-            | Linux    | `TrainsDownloader-linux` → `chmod +x TrainsDownloader-linux` → run |
-            | macOS    | `TrainsDownloader-macos` → run directly |
+            Windows: portable executable or per-user installer. The portable version requires Microsoft Edge WebView2; the installer provides its bootstrapper.
+            Linux: AppImage. macOS: application in a DMG.
+            Google Chrome is required for download jobs. Python is bundled.
 
-            **Requirement:** Chrome must be installed. ChromeDriver downloads automatically on first run.
+            To retain portable settings, place the new app in the same writable folder as the previous app and its data files. Keep cookie files private.

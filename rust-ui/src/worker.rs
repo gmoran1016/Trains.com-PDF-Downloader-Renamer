@@ -12,7 +12,23 @@ use std::{
     thread,
 };
 
-use eframe::egui;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct WorkerNotifier(Arc<dyn Fn() + Send + Sync>);
+impl WorkerNotifier {
+    pub fn new(callback: impl Fn() + Send + Sync + 'static) -> Self {
+        Self(Arc::new(callback))
+    }
+    pub fn notify(&self) {
+        (self.0)();
+    }
+}
+impl fmt::Debug for WorkerNotifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WorkerNotifier")
+    }
+}
 
 #[cfg(feature = "desktop-smoke")]
 use std::time::Duration;
@@ -76,11 +92,11 @@ pub trait WorkerLauncher: Send + Sync {
         Err(WorkerError::Unavailable)
     }
 
-    fn start_with_repaint(
+    fn start_with_notify(
         &self,
         request: WorkerRequest,
         data_dir: PathBuf,
-        _context: egui::Context,
+        _context: WorkerNotifier,
     ) -> Result<WorkerHandle, WorkerError> {
         self.start(request, data_dir)
     }
@@ -94,7 +110,7 @@ impl WorkerLauncher for UnavailableWorker {}
 pub struct CommandWorkerLauncher {
     program: PathBuf,
     args: Vec<OsString>,
-    repaint_context: Option<egui::Context>,
+    notifier: Option<WorkerNotifier>,
 }
 
 impl CommandWorkerLauncher {
@@ -106,7 +122,7 @@ impl CommandWorkerLauncher {
         Self {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
-            repaint_context: None,
+            notifier: None,
         }
     }
 }
@@ -153,7 +169,7 @@ impl WorkerLauncher for CommandWorkerLauncher {
 
         let reader_output = WorkerEventSender {
             sender: output_tx.clone(),
-            repaint_context: self.repaint_context.clone(),
+            notifier: self.notifier.clone(),
         };
         let writer_output = reader_output.clone();
         thread::Builder::new()
@@ -185,14 +201,14 @@ impl WorkerLauncher for CommandWorkerLauncher {
         })
     }
 
-    fn start_with_repaint(
+    fn start_with_notify(
         &self,
         request: WorkerRequest,
         data_dir: PathBuf,
-        context: egui::Context,
+        context: WorkerNotifier,
     ) -> Result<WorkerHandle, WorkerError> {
         let mut launcher = self.clone();
-        launcher.repaint_context = Some(context);
+        launcher.notifier = Some(context);
         launcher.start(request, data_dir)
     }
 }
@@ -233,16 +249,16 @@ impl WorkerLauncher for EmbeddedWorkerLauncher {
         Ok(handle)
     }
 
-    fn start_with_repaint(
+    fn start_with_notify(
         &self,
         request: WorkerRequest,
         data_dir: PathBuf,
-        context: egui::Context,
+        context: WorkerNotifier,
     ) -> Result<WorkerHandle, WorkerError> {
         let extracted = extract_worker(EMBEDDED_WORKER, &self.temp_root, env!("CARGO_PKG_VERSION"))
             .map_err(WorkerError::Bundle)?;
         let launcher = CommandWorkerLauncher::new(extracted.path(), [OsString::from("--stdio")]);
-        let mut handle = launcher.start_with_repaint(request, data_dir, context)?;
+        let mut handle = launcher.start_with_notify(request, data_dir, context)?;
         handle._bundle_guard = Some(extracted);
         Ok(handle)
     }
@@ -278,7 +294,7 @@ enum ReaderMessage {
 #[derive(Clone)]
 struct WorkerEventSender {
     sender: Sender<ReaderMessage>,
-    repaint_context: Option<egui::Context>,
+    notifier: Option<WorkerNotifier>,
 }
 
 impl WorkerEventSender {
@@ -286,8 +302,8 @@ impl WorkerEventSender {
         if self.sender.send(message).is_err() {
             return false;
         }
-        if let Some(context) = &self.repaint_context {
-            context.request_repaint();
+        if let Some(context) = &self.notifier {
+            context.notify();
         }
         true
     }
@@ -851,11 +867,11 @@ impl WorkerLauncher for FakeWorkerLauncher {
         self.start_fake(request, data_dir, None)
     }
 
-    fn start_with_repaint(
+    fn start_with_notify(
         &self,
         request: WorkerRequest,
         data_dir: PathBuf,
-        context: egui::Context,
+        context: WorkerNotifier,
     ) -> Result<WorkerHandle, WorkerError> {
         self.start_fake(request, data_dir, Some(context))
     }
@@ -867,15 +883,20 @@ impl FakeWorkerLauncher {
         &self,
         request: WorkerRequest,
         _data_dir: PathBuf,
-        repaint_context: Option<egui::Context>,
+        notifier: Option<WorkerNotifier>,
     ) -> Result<WorkerHandle, WorkerError> {
         let (output_sender, output_rx) = mpsc::channel();
         let output_tx = WorkerEventSender {
             sender: output_sender,
-            repaint_context,
+            notifier,
         };
         let (cancel_tx, cancel_rx) = mpsc::channel();
         let job_kind = request.job_kind;
+        let tick = std::env::var("TRAINS_UI_SMOKE_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(350)
+            .clamp(1, 5_000);
         let desired_outcome = match std::env::var("TRAINS_UI_SMOKE_OUTCOME").as_deref() {
             Ok("no-results") => JobOutcome::NoResults,
             Ok("failed") => JobOutcome::Failed,
@@ -887,7 +908,7 @@ impl FakeWorkerLauncher {
             .spawn(move || {
                 output_tx.send(ReaderMessage::Event(WorkerEvent::Started));
                 for done in 1..=4 {
-                    if cancel_rx.recv_timeout(Duration::from_millis(350)).is_ok() {
+                    if cancel_rx.recv_timeout(Duration::from_millis(tick)).is_ok() {
                         output_tx.send(ReaderMessage::Event(WorkerEvent::Completed {
                             outcome: JobOutcome::Cancelled,
                             summary: organize_summary(job_kind, false),
@@ -949,7 +970,8 @@ fn organize_summary(job_kind: JobKind, scan_complete: bool) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CancelControl, ReaderMessage, WorkerEvent, WorkerEventSender, WorkerHandle, decode_event,
+        CancelControl, ReaderMessage, WorkerEvent, WorkerEventSender, WorkerHandle, WorkerNotifier,
+        decode_event,
     };
     use crate::model::MagazineProgress;
     use std::{
@@ -964,16 +986,15 @@ mod tests {
 
     #[test]
     fn worker_message_wakes_the_ui_thread() {
-        let context = eframe::egui::Context::default();
         let callback_count = Arc::new(AtomicUsize::new(0));
         let callback_counter = Arc::clone(&callback_count);
-        context.set_request_repaint_callback(move |_| {
+        let context = WorkerNotifier::new(move || {
             callback_counter.fetch_add(1, Ordering::SeqCst);
         });
         let (sender, receiver) = mpsc::channel();
         let output = WorkerEventSender {
             sender,
-            repaint_context: Some(context),
+            notifier: Some(context),
         };
 
         let sent = thread::spawn(move || output.send(ReaderMessage::StdoutClosed))

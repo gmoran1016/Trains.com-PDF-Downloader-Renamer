@@ -1,0 +1,21 @@
+[package]
+name = "trains-desktop"
+version = "1.10.0"
+edition = "2024"
+rust-version = "1.95"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+ui-qa = ["trains-com-downloader/desktop-smoke"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-clipboard-manager = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time"] }
+rfd = "=0.17.2"
+trains-com-downloader = { path = "../../rust-ui" }

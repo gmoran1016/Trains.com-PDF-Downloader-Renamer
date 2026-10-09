@@ -43,6 +43,13 @@ htmlcov/
 build/
 dist/
 /rust-ui/target/
+/desktop-ui/node_modules/
+/desktop-ui/dist/
+/desktop-ui/src-tauri/target/
+/desktop-ui/src-tauri/gen/
+/desktop-ui/test-results/
+/desktop-ui/playwright-report/
+/desktop-ui/*.tsbuildinfo
 # The project builds from command-line PyInstaller options; any generated spec is local only.
 *.spec
 TrainsDownloader-*.exe

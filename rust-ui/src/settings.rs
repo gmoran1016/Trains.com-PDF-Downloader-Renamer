@@ -77,7 +77,7 @@ impl Settings {
             window_width: 1120.0,
             window_height: 760.0,
             activity_height: 220.0,
-            activity_collapsed: false,
+            activity_collapsed: true,
             dark_mode: false,
             extra: BTreeMap::new(),
         }

@@ -1,5 +1,7 @@
 # Rust Desktop UI Design Spec
 
+Historical specification for the egui implementation. The replacement desktop interface is described in [Tauri desktop design](superpowers/specs/2026-10-09-tauri-desktop-design.md); the workflow and data compatibility requirements remain binding.
+
 **Status:** Approved; compatibility inventory clarified
 **Scope:** Replace the user-facing PyQt interface with a Rust/eframe desktop app while retaining the Python download and organizer engine.
 
