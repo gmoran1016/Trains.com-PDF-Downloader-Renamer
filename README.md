@@ -113,7 +113,7 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install -r requirements-dev.txt pyinstaller
+pip install -r requirements-dev.txt
 ```
 
 On Windows, run `build.bat` to check and package the Tauri app and Python worker. Outputs use a fresh folder under `dist/desktop-*`; existing build and distribution artifacts are preserved. For Linux and macOS, use the GitHub Actions matrix. Development: install dependencies with `npm ci` inside `desktop-ui`, then run `npm run tauri -- dev`. A debug build without an embedded worker displays a useful job-start failure; build the Python worker and set `TRAINSDOWNLOADER_WORKER` for real download jobs. Never use live account/library data for UI checks.
@@ -167,7 +167,7 @@ worker_main.py                 # bundled JSON-lines worker entry point
 worker_protocol.py             # versioned worker request/response schema
 trains_app.py                  # retained Python download, organizer, and PDF engine
 requirements.txt               # runtime pip dependencies
-requirements-dev.txt           # runtime dependencies plus pytest
+requirements-dev.txt           # runtime, test, and packaging dependencies
 build.bat                      # local Windows build script
 pytest.ini                     # pytest config
 tests/

@@ -34,12 +34,12 @@ jobs:
             bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
           cache: pip
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm
@@ -56,7 +56,7 @@ jobs:
             libdbus-1-dev libxcb-xinerama0 libxcb-cursor0 libxcb1 libx11-xcb1 \
             libxkbcommon-x11-0 libgl1 libegl1
       - name: Install Python dependencies
-        run: python -m pip install -r requirements-dev.txt pyinstaller
+        run: python -m pip install -r requirements-dev.txt
       - name: Install frontend dependencies
         working-directory: desktop-ui
         run: npm ci
@@ -119,14 +119,14 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-desktop-release.ps1 -ExecutablePath dist/release/TrainsDownloader-windows.exe
       - name: Save platform packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.platform }}
           path: dist/release/*
           if-no-files-found: error
       - name: Save rendered-test evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ui-evidence-${{ matrix.platform }}
           path: desktop-ui/test-results/
@@ -139,8 +139,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: desktop-*
           path: dist/release
@@ -155,7 +155,7 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\n')
           PY
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
