@@ -108,6 +108,93 @@ def test_rename_and_move_moves_and_renames_valid_pdf(tmp_path):
     assert os.path.exists(result)
 
 
+def test_fetch_pdf_uses_issue_page_for_name_and_metadata(monkeypatch, tmp_path):
+    import requests
+    import trains_app
+
+    issue_url = "https://www.trains.com/mrr/magazine/january-2024/"
+    pdf_bytes = _make_valid_pdf_bytes()
+    raw_dir = tmp_path / "raw"
+    destination = tmp_path / "MRR"
+    raw_dir.mkdir()
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            assert chunk_size == 65536
+            yield pdf_bytes
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: FakeResponse())
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    ok, result = trains_app.fetch_pdf(
+        "https://cdn.example/files/opaque-id.pdf",
+        str(destination),
+        "MRR",
+        {},
+        False,
+        str(raw_dir),
+        lambda _message: None,
+        issue_url=issue_url,
+    )
+
+    assert ok is True
+    assert os.path.normcase(result) == os.path.normcase(
+        str(destination / "2024" / "MRR-01-January-2024.pdf")
+    )
+    metadata = trains_app.pypdf.PdfReader(result).metadata
+    assert metadata.get("/Title") == "Model Railroader - January, 2024"
+    assert metadata.get("/Author") == "Model Railroader"
+    assert metadata.get("/Subject") == "January 2024"
+
+
+def test_issue_already_on_disk_finds_legacy_root_level_issue_file(tmp_path):
+    from trains_app import issue_already_on_disk
+
+    destination = tmp_path / "MRR"
+    destination.mkdir()
+    (destination / "MRR-01-January-2024.pdf").write_bytes(b"previous download")
+
+    assert issue_already_on_disk(
+        "https://www.trains.com/mrr/magazine/january-2024/",
+        str(destination),
+        "MRR",
+        flat=False,
+    ) is True
+
+
+def test_undated_special_issue_uses_stable_name_and_is_detected_on_disk(tmp_path):
+    import trains_app
+
+    source = tmp_path / "raw"
+    destination = tmp_path / "Special Issues"
+    source.mkdir()
+    (source / "opaque-id.pdf").write_bytes(_make_valid_pdf_bytes())
+    issue_url = (
+        "https://www.trains.com/mrr/magazine/special-issues/railroad-technology/"
+    )
+
+    ok, result = trains_app.rename_and_move(
+        str(source / "opaque-id.pdf"),
+        str(destination),
+        "MRR",
+        True,
+        lambda _message: None,
+        issue_url=issue_url,
+    )
+
+    assert ok is True
+    assert os.path.basename(result) == "railroad-technology.pdf"
+    assert trains_app.issue_already_on_disk(
+        issue_url, str(destination), "MRR", flat=True
+    ) is True
+
+
 def test_organize_pdfs_rejects_corrupt_input_without_moving(tmp_path):
     from trains_app import organize_pdfs
 
@@ -171,6 +258,102 @@ def test_organize_pdfs_reports_completeness_per_publication(tmp_path):
     assert summary.missing_by_prefix_year["CTR"]["2024"] == [
         "June", "September", "December"
     ]
+
+
+def test_organize_activity_reports_stages_and_each_file_outcome(tmp_path, monkeypatch):
+    import trains_app
+
+    archive = tmp_path / "archive"
+    incoming = archive / "incoming"
+    year = archive / "2024"
+    incoming.mkdir(parents=True)
+    year.mkdir()
+    data = _make_valid_pdf_bytes()
+    (year / "MRR-01-January-2024.pdf").write_bytes(data)
+    (year / "MRR-02-February-2024.pdf").write_bytes(data)
+    (incoming / "MRR-2024-01.pdf").write_bytes(data)
+    (incoming / "MRR-2024-03.pdf").write_bytes(data)
+    (incoming / "MRR-2024-04.pdf").write_bytes(b"%PDF-1.4 truncated")
+    (incoming / "mystery.pdf").write_bytes(data)
+    monkeypatch.setattr(trains_app, "_stamp_pdf_metadata", lambda *_args, **_kwargs: False)
+    worker = trains_app.OrganizeWorker(str(archive), str(archive), "MRR")
+    logs, statuses, progress = [], [], []
+    worker.signals.log.connect(logs.append)
+    worker.signals.status_msg.connect(statuses.append)
+    worker.signals.progress.connect(lambda done, total: progress.append((done, total)))
+
+    worker.run()
+
+    assert logs[0].startswith("[stage] Scanning folders")
+    assert any(line.startswith("[stage] Organizing 6 PDFs") for line in logs)
+    assert any(line.startswith("[stage] Checking issue coverage") for line in logs)
+    outcomes = [line for line in logs if line.startswith(
+        ("[moved]", "[unchanged]", "[conflict]", "[corrupt]", "[unrecognized]")
+    )]
+    assert len(outcomes) == 6
+    assert sum(line.startswith("[unchanged]") for line in outcomes) == 2
+    moved = next(line for line in outcomes if line.startswith("[moved]"))
+    assert "MRR-03-March-2024.pdf" in moved
+    assert str(incoming / "MRR-2024-03.pdf") in moved
+    assert str(year / "MRR-03-March-2024.pdf") in moved
+    conflict = next(line for line in outcomes if line.startswith("[conflict]"))
+    assert "both files preserved" in conflict.lower()
+    assert (year / "MRR-01-January-2024-1.pdf").exists()
+    assert (incoming / "MRR-2024-04.pdf").exists()
+    assert (incoming / "mystery.pdf").exists()
+    assert progress[0] == (0, 6) and progress[-1] == (6, 6)
+    assert any("PDF 1 of 6" in message for message in statuses)
+    assert any("Checking issue coverage" in message for message in statuses)
+    assert logs[-1].startswith("[summary] Organization complete")
+    assert "2 moved" in logs[-1] and "2 already organized" in logs[-1]
+    assert "Unrecognized: 1" in logs[-1] and "Unreadable PDFs: 1" in logs[-1]
+    assert "Conflicts: 1" in logs[-1] and "Metadata updated: 0" in logs[-1]
+    assert any(line.startswith("[coverage]") and "January" not in line.split("missing", 1)[-1]
+               for line in logs)
+
+
+def test_organize_activity_keeps_metadata_failure_with_file_outcome(tmp_path, monkeypatch):
+    import trains_app
+
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    source.mkdir()
+    (source / "MRR-2024-01.pdf").write_bytes(_make_valid_pdf_bytes())
+
+    def failed_metadata(_path, _month, _year, warn_fn):
+        warn_fn("Warning: metadata update failed: access denied")
+        return False
+
+    monkeypatch.setattr(trains_app, "_stamp_pdf_metadata", failed_metadata)
+    logs = []
+    summary = trains_app.organize_pdfs(str(source), str(destination), "MRR", log_fn=logs.append)
+
+    moved = [line for line in logs if line.startswith("[moved]")]
+    assert len(moved) == 1
+    assert "Metadata warning: Warning: metadata update failed: access denied" in moved[0]
+    assert summary.moved == 1 and summary.metadata_stamped == 0
+    assert summary.scan_complete is True
+
+
+def test_organize_activity_identifies_cancelled_coverage_as_partial(tmp_path, monkeypatch):
+    import trains_app
+
+    source, destination = tmp_path / "source", tmp_path / "destination"
+    source.mkdir()
+    for month in ("01", "02"):
+        (source / f"MRR-2024-{month}.pdf").write_bytes(_make_valid_pdf_bytes())
+    monkeypatch.setattr(trains_app, "_stamp_pdf_metadata", lambda *_args, **_kwargs: False)
+    worker = trains_app.OrganizeWorker(str(source), str(destination), "MRR")
+    logs = []
+    worker.signals.log.connect(logs.append)
+    worker.signals.progress.connect(lambda done, _total: worker.stop() if done == 1 else None)
+
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_CANCELLED
+    assert worker.result.scan_complete is False
+    assert len(list(source.glob("*.pdf"))) == 1
+    assert "partial" in logs[-1].lower() and "cancelled" in logs[-1].lower()
+    assert any(line.startswith("[coverage]") and "partial" in line.lower() for line in logs)
 
 
 def test_organize_stops_between_files_with_partial_summary(tmp_path, monkeypatch):
@@ -728,7 +911,9 @@ def test_download_worker_downloads_partial_results_and_continues_after_scan_fail
         def close(self):
             pass
 
-    def fake_fetch_pdf(url, dest_dir, prefix, cookies, flat, download_dir, log_fn):
+    def fake_fetch_pdf(
+        url, dest_dir, prefix, cookies, flat, download_dir, log_fn, issue_url=None
+    ):
         downloaded.append(url)
         return True, url.rsplit("/", 1)[-1]
 
@@ -943,13 +1128,16 @@ def test_download_worker_passes_direct_pdf_url_from_issue_mode(monkeypatch, tmp_
         def close(self):
             pass
 
-    def fake_fetch_pdf(url, dest_dir, prefix, cookies, flat, download_dir, log_fn):
+    def fake_fetch_pdf(
+        url, dest_dir, prefix, cookies, flat, download_dir, log_fn, issue_url=None
+    ):
         captured.update(
             url=url,
             dest_dir=dest_dir,
             prefix=prefix,
             cookies=cookies,
             flat=flat,
+            issue_url=issue_url,
         )
         return True, "downloaded.pdf"
 
@@ -971,4 +1159,64 @@ def test_download_worker_passes_direct_pdf_url_from_issue_mode(monkeypatch, tmp_
         "prefix": "MRR",
         "cookies": {"auth": "token"},
         "flat": False,
+        "issue_url": issue_url,
     }
+
+
+def test_download_worker_skips_issue_in_legacy_folder_without_progress(
+    monkeypatch, tmp_path
+):
+    import trains_app
+
+    issue_url = "https://www.trains.com/mrr/magazine/january-2024/"
+    destination = tmp_path / "MRR"
+    destination.mkdir()
+    (destination / "MRR-01-January-2024.pdf").write_bytes(b"existing issue")
+    fetched = []
+
+    class Driver:
+        def get_cookies(self):
+            return []
+
+    class ExistingIssueDownloader:
+        def __init__(self, download_dir, headless, log_fn):
+            self._driver = Driver()
+
+        def wait_for_manual_login(self, **_kwargs):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            return [issue_url]
+
+        def close(self):
+            pass
+
+    def fake_fetch_pdf(*_args, **_kwargs):
+        fetched.append(True)
+        return True, "unexpected.pdf"
+
+    monkeypatch.setattr(
+        trains_app,
+        "MAGAZINES",
+        {"Model Railroader": {
+            "url": "https://www.trains.com/mrr/magazine/",
+            "prefix": "MRR",
+        }},
+    )
+    monkeypatch.setattr(trains_app, "MagazineDownloader", ExistingIssueDownloader)
+    monkeypatch.setattr(trains_app, "fetch_pdf", fake_fetch_pdf)
+    monkeypatch.setattr(
+        trains_app,
+        "load_progress",
+        lambda: {"completed": [], "completed_scoped": [], "failed": []},
+    )
+    monkeypatch.setattr(trains_app, "save_progress", lambda _progress: None)
+
+    worker = trains_app.DownloadWorker(
+        ["Model Railroader"], str(tmp_path), False, True, None, True,
+        include_specials=False,
+    )
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_SUCCESS
+    assert fetched == []

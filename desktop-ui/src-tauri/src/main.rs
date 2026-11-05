@@ -47,6 +47,10 @@ async fn get_snapshot(state: State<'_, DesktopState>) -> CommandResult<DesktopSn
     Ok(snapshot(&state))
 }
 #[tauri::command]
+async fn is_portable() -> bool {
+    cfg!(feature = "portable")
+}
+#[tauri::command]
 async fn update_settings(
     app: tauri::AppHandle,
     state: State<'_, DesktopState>,
@@ -93,12 +97,13 @@ async fn get_activity(
     query: String,
     offset: usize,
     limit: usize,
+    needs_attention: Option<bool>,
 ) -> CommandResult<ActivityPage> {
     Ok(state
         .core
         .lock()
         .map_err(|_| "Activity is unavailable.")?
-        .activity(&query, offset, limit))
+        .filtered_activity(&query, offset, limit, needs_attention.unwrap_or(false)))
 }
 #[tauri::command]
 async fn clear_activity(
@@ -123,6 +128,22 @@ async fn copy_errors(app: tauri::AppHandle, state: State<'_, DesktopState>) -> C
     app.clipboard()
         .write_text(text)
         .map_err(|_| "The errors could not be copied to the clipboard.".into())
+}
+#[tauri::command]
+async fn copy_activity(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+    query: String,
+    needs_attention: Option<bool>,
+) -> CommandResult<()> {
+    let text = state
+        .core
+        .lock()
+        .map_err(|_| "Activity is unavailable.")?
+        .activity_text(&query, needs_attention.unwrap_or(false));
+    app.clipboard()
+        .write_text(text)
+        .map_err(|_| "Activity could not be copied to the clipboard.".into())
 }
 #[tauri::command]
 async fn clear_cache(
@@ -297,6 +318,9 @@ fn main() {
     let core = TrainsApp::new(data_directory(), launcher);
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(DesktopState {
             core: Mutex::new(core),
             quit_after_worker: Mutex::new(false),
@@ -305,12 +329,14 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_snapshot,
+            is_portable,
             update_settings,
             start_job,
             stop_job,
             get_activity,
             clear_activity,
             copy_errors,
+            copy_activity,
             clear_cache,
             choose_path,
             close_action

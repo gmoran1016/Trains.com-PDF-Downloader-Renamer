@@ -12,6 +12,19 @@ import { Button, Modal } from "./components/controls";
 import { headings, WorkflowAction, Workflows } from "./components/Workflows";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Activity } from "./components/Activity";
+import { UpdateDialog } from "./components/UpdateDialog";
+import {
+  checkForUpdates,
+  getInstalledVersion,
+  installAvailableUpdate,
+  isPortableBuild,
+  openPortableUpdate,
+} from "./updater";
+import type {
+  AvailableUpdate,
+  DownloadProgress,
+  UpdateCheckStatus,
+} from "./updater";
 const navigation: [WorkArea, string, typeof BookOpen][] = [
   ["magazines", "Magazines", BookOpen],
   ["track-plans", "Track Plans", Map],
@@ -25,7 +38,73 @@ export default function App() {
   const [cacheOpen, setCacheOpen] = useState(false);
   const [closeOpen, setCloseOpen] = useState(false);
   const [working, setWorking] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState("");
+  const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>("idle");
+  const [availableUpdate, setAvailableUpdate] =
+    useState<AvailableUpdate | null>(null);
+  const [updateError, setUpdateError] = useState("");
+  const [portable, setPortable] = useState(false);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateProgress, setUpdateProgress] =
+    useState<DownloadProgress | null>(null);
   const queue = useRef<Promise<void>>(Promise.resolve());
+  const startupUpdateCheckStarted = useRef(false);
+  const updateCheckInFlight = useRef(false);
+  const checkForUpdatesInSettings = async () => {
+    if (updateCheckInFlight.current) return;
+    updateCheckInFlight.current = true;
+    setUpdateStatus("checking");
+    setUpdateError("");
+    try {
+      const [version, isPortable] = await Promise.all([
+        getInstalledVersion(),
+        isPortableBuild(),
+      ]);
+      setCurrentVersion(version);
+      setPortable(isPortable);
+      const update = await checkForUpdates();
+      setAvailableUpdate(update);
+      if (update) {
+        setUpdateStatus("available");
+        setUpdateDialogOpen(true);
+      } else {
+        setUpdateStatus("current");
+      }
+    } catch (error) {
+      setUpdateError(errorMessage(error));
+      setUpdateProgress(null);
+      setUpdateStatus("error");
+    } finally {
+      updateCheckInFlight.current = false;
+    }
+  };
+  const installUpdate = async () => {
+    setInstallingUpdate(true);
+    setUpdateProgress({ downloaded: 0, total: null });
+    setUpdateError("");
+    try {
+      await installAvailableUpdate(setUpdateProgress);
+      setAvailableUpdate(null);
+      setUpdateStatus("current");
+      setUpdateDialogOpen(false);
+    } catch (error) {
+      setUpdateError(errorMessage(error));
+      setUpdateProgress(null);
+      setUpdateStatus("error");
+    } finally {
+      setInstallingUpdate(false);
+    }
+  };
+  const downloadPortableUpdate = async () => {
+    setUpdateError("");
+    try {
+      await openPortableUpdate();
+    } catch (error) {
+      setUpdateError(errorMessage(error));
+      setUpdateStatus("error");
+    }
+  };
   useEffect(() => {
     let active = true;
     const unlisteners: (() => void)[] = [];
@@ -65,6 +144,11 @@ export default function App() {
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
+  useEffect(() => {
+    if (!state || startupUpdateCheckStarted.current) return;
+    startupUpdateCheckStarted.current = true;
+    void checkForUpdatesInSettings();
+  }, [state]);
   useEffect(() => {
     document.documentElement.dataset.theme = settings?.dark_mode
       ? "dark"
@@ -255,6 +339,24 @@ export default function App() {
         cookieExists={state.cookie_file_exists}
         busy={state.busy}
         save={patch}
+        currentVersion={currentVersion}
+        updateStatus={updateStatus}
+        updateVersion={availableUpdate?.version ?? null}
+        updateError={updateError}
+        checkForUpdates={() => void checkForUpdatesInSettings()}
+      />
+      <UpdateDialog
+        open={updateDialogOpen}
+        setOpen={setUpdateDialogOpen}
+        currentVersion={currentVersion}
+        update={availableUpdate}
+        portable={portable}
+        busy={state.busy || working}
+        installing={installingUpdate}
+        progress={updateProgress}
+        error={updateError}
+        install={() => void installUpdate()}
+        openPortable={() => void downloadPortableUpdate()}
       />
       <Modal
         open={cacheOpen}

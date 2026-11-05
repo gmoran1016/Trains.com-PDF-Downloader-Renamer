@@ -105,14 +105,15 @@ for (const [width, height] of [
     test(
       "controls fit " + width + "x" + height + " " + (dark ? "dark" : "light"),
       async ({ page }) => {
-        // Each case renders three work areas and four screenshots. Windows CI
-        // can take just over Playwright's default 30 seconds under two workers.
+        // Activity paging is covered separately; keep these screenshots focused
+        // on the work area layout instead of rendering the full history each time.
         test.setTimeout(60_000);
         await page.setViewportSize({ width, height });
         await desktopFixture(page, {
           dark,
           expanded: true,
           outcome: "running",
+          activityEntries: 24,
         });
         await page.goto("/");
         await expect(
@@ -145,6 +146,7 @@ for (const [width, height] of [
               "-" +
               work.replaceAll(" ", "-") +
               ".png",
+            animations: "disabled",
           });
         }
         await page.screenshot({
@@ -154,6 +156,7 @@ for (const [width, height] of [
             "-" +
             (dark ? "dark" : "light") +
             ".png",
+          animations: "disabled",
         });
       },
     );
@@ -240,7 +243,12 @@ test("activity filters retained history, copies errors and clears explicitly", a
 test("activity shows new rows and errors while worker logs continue every 50 ms", async ({
   page,
 }) => {
-  await desktopFixture(page, { expanded: true, outcome: "running" });
+  if (process.env.CI) test.setTimeout(60_000);
+  await desktopFixture(page, {
+    expanded: true,
+    outcome: "running",
+    activityEntries: 24,
+  });
   await page.goto("/");
   await page
     .getByLabel("Filter activity", { exact: true })
@@ -263,6 +271,129 @@ test("activity shows new rows and errors while worker logs continue every 50 ms"
     await page.evaluate(() => (window as any).__TRAINS_QA__.stopLogStream());
   }
 });
+
+test("organizer activity makes outcomes readable and keeps full paths in details", async ({
+  page,
+}) => {
+  if (process.env.CI) test.setTimeout(60_000);
+  await page.setViewportSize({ width: 1120, height: 760 });
+  await desktopFixture(page, {
+    expanded: true,
+    organizerActivity: true,
+    outcome: "running",
+  });
+  await page.goto("/");
+  const conflict = page
+    .locator(".log-row")
+    .filter({ hasText: "MRR-01-January-2024-1.pdf" })
+    .first();
+  await expect(conflict.getByText("Conflict", { exact: true })).toBeVisible();
+  await expect(conflict.locator("time")).toHaveAttribute(
+    "datetime",
+    /\d{4}-\d{2}-\d{2}T/,
+  );
+  await expect(
+    conflict.getByText("Both files preserved.", { exact: true }),
+  ).toBeVisible();
+  await expect(conflict.locator("details")).not.toHaveAttribute("open");
+  await conflict.getByText("Details", { exact: true }).click();
+  await expect(conflict.locator(".log-details")).toContainText(
+    "Destination: D:/Organized archive/2024/MRR-01-January-2024-1.pdf",
+  );
+  await page.screenshot({
+    path: "test-results/organizer-activity-1120-light.png",
+    animations: "disabled",
+  });
+  await page
+    .getByLabel("Activity scope", { exact: true })
+    .selectOption("attention");
+  await expect(page.locator(".log-row")).toHaveCount(2);
+  await expect(page.getByRole("log")).not.toContainText(
+    "MRR-03-March-2024.pdf",
+  );
+  await page.getByRole("button", { name: "Copy log", exact: true }).click();
+  expect(
+    await page.evaluate(
+      () =>
+        (window as any).__TRAINS_QA__.records.find(
+          (r: any) => r.command === "copy_activity",
+        ).args,
+    ),
+  ).toEqual({ query: "", needsAttention: true });
+  await page
+    .getByLabel("Filter activity", { exact: true })
+    .fill("does not exist");
+  await expect(
+    page.getByText("No activity matches this filter.", { exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Activity scope", { exact: true }).selectOption("all");
+  await page
+    .getByLabel("Filter activity", { exact: true })
+    .fill("Organizing 42");
+  await expect(page.locator(".log-row")).toHaveCount(1);
+});
+
+for (const dark of [false, true]) {
+  test(
+    "organizer activity details fit a small window " +
+      (dark ? "dark" : "light"),
+    async ({ page }) => {
+      await page.setViewportSize({ width: 640, height: 480 });
+      await desktopFixture(page, {
+        expanded: true,
+        organizerActivity: true,
+        outcome: "running",
+        dark,
+      });
+      await page.goto("/");
+      await expect(page.locator(".log-row")).toHaveCount(4);
+      const headline = await page
+        .locator(".log-headline")
+        .first()
+        .boundingBox();
+      const initialLog = await page.getByRole("log").boundingBox();
+      expect(headline!.y).toBeGreaterThanOrEqual(initialLog!.y);
+      expect(headline!.y + headline!.height).toBeLessThanOrEqual(
+        initialLog!.y + initialLog!.height,
+      );
+      await page.screenshot({
+        path: `test-results/organizer-activity-640-${dark ? "dark" : "light"}.png`,
+      });
+      await page
+        .getByRole("log")
+        .getByText("Details", { exact: true })
+        .first()
+        .click();
+      await expect(page.locator("details[open]").first()).toBeVisible();
+      // Reading long details scrolls only Activity, while its toolbar and the
+      // workflow actions stay in place. The first headline fits before scrolling.
+      const detailVisible = await page.getByRole("log").evaluate((element) => {
+        const details = element.querySelector("details[open] .log-details")!;
+        element.scrollTop +=
+          details.getBoundingClientRect().top -
+          element.getBoundingClientRect().top;
+        const top = details.getBoundingClientRect().top;
+        const viewport = element.getBoundingClientRect();
+        return top >= viewport.top - 1 && top < viewport.bottom;
+      });
+      expect(detailVisible).toBe(true);
+      const log = await page.getByRole("log").boundingBox();
+      expect(log!.height).toBeGreaterThanOrEqual(20);
+      const overflow = await page.evaluate(() => ({
+        page: document.documentElement.scrollWidth > window.innerWidth,
+        log:
+          document.querySelector(".activity-events")!.scrollWidth >
+          document.querySelector(".activity-events")!.clientWidth,
+        buttons: [
+          ...document.querySelectorAll(
+            ".activity-toolbar button, .activity-toolbar select",
+          ),
+        ].some((el) => el.getBoundingClientRect().right > window.innerWidth),
+      }));
+      expect(overflow).toEqual({ page: false, log: false, buttons: false });
+    },
+  );
+}
 
 for (const [outcome, label] of [
   ["idle", "Ready"],

@@ -10,6 +10,7 @@ import {
   Search,
 } from "lucide-react";
 import { Button } from "./controls";
+import { ActivityEntry } from "./ActivityEntry";
 import { desktopInvoke, errorMessage } from "../desktop";
 import type { ActivityPage, Outcome, Settings, Snapshot } from "../types";
 const outcomes: Record<Outcome, [string, typeof Circle]> = {
@@ -35,9 +36,10 @@ export function Activity({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("");
+  const [scope, setScope] = useState("all");
   const [offset, setOffset] = useState(0);
   const [rows, setRows] = useState<ActivityPage>({ entries: [], total: 0 });
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"activity" | "errors" | null>(null);
   const [height, setHeight] = useState(settings.activity_height);
   const revision = useRef("");
   const reportError = useRef(onError);
@@ -67,6 +69,7 @@ export function Activity({
             query: filter,
             offset,
             limit: 100,
+            needsAttention: scope === "attention",
           });
           if (active) setRows(next);
         } catch (error) {
@@ -83,7 +86,7 @@ export function Activity({
       active = false;
       clearTimeout(timer);
     };
-  }, [expanded, filter, offset]);
+  }, [expanded, filter, offset, scope]);
   const [label, Icon] = outcomes[state.job.outcome];
   const message = state.job.outcome === "idle" ? "" : state.job.message;
   const progress =
@@ -93,11 +96,16 @@ export function Activity({
           Math.max(0, ((state.job.done || 0) / state.job.total) * 100),
         )
       : null;
-  const copy = async () => {
+  const copy = async (kind: "activity" | "errors") => {
     try {
-      await desktopInvoke("copy_errors");
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      await desktopInvoke(
+        kind === "errors" ? "copy_errors" : "copy_activity",
+        kind === "activity"
+          ? { query: filter, needsAttention: scope === "attention" }
+          : undefined,
+      );
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 2000);
     } catch (error) {
       onError(errorMessage(error));
     }
@@ -218,13 +226,37 @@ export function Activity({
                 }}
               />
             </div>
-            <span className="error-count">{state.error_count} errors</span>
+            <select
+              className="activity-scope"
+              aria-label="Activity scope"
+              value={scope}
+              onChange={(event) => {
+                setScope(event.target.value);
+                setOffset(0);
+              }}
+            >
+              <option value="all">All activity</option>
+              <option value="attention">Needs attention</option>
+            </select>
+            <span className="error-count">
+              {state.error_count} {state.error_count === 1 ? "error" : "errors"}{" "}
+              · {state.warning_count || 0}{" "}
+              {state.warning_count === 1 ? "warning" : "warnings"}
+            </span>
+            <Button
+              className="compact-button"
+              disabled={!rows.total}
+              title="Copy all matching events, including full paths and details"
+              onClick={() => void copy("activity")}
+            >
+              {copied === "activity" ? "Copied" : "Copy log"}
+            </Button>
             <Button
               className="compact-button"
               disabled={!state.error_count}
-              onClick={() => void copy()}
+              onClick={() => void copy("errors")}
             >
-              {copied ? "Copied" : "Copy errors"}
+              {copied === "errors" ? "Copied" : "Copy errors"}
             </Button>
             <Button
               className="compact-button"
@@ -255,14 +287,7 @@ export function Activity({
               <p className="muted">No activity matches this filter.</p>
             ) : (
               rows.entries.map((entry, index) => (
-                <div className={`log-row ${entry.level}`} key={offset + index}>
-                  <span className="log-level">
-                    {entry.level === "debug"
-                      ? "Detail"
-                      : entry.level[0].toUpperCase() + entry.level.slice(1)}
-                  </span>
-                  <span>{entry.message}</span>
-                </div>
+                <ActivityEntry entry={entry} key={entry.id ?? offset + index} />
               ))
             )}
           </div>

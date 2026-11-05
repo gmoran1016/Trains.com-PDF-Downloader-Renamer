@@ -77,6 +77,10 @@ pub enum LogLevel {
 pub struct LogEntry {
     pub level: LogLevel,
     pub message: String,
+    #[serde(default)]
+    pub id: u64,
+    #[serde(default)]
+    pub timestamp_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -1,6 +1,8 @@
 # Trains.com Magazine & Track Plan Downloader
 
-**v1.10.0** — A Tauri desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer. The interface uses React and TypeScript; Rust retains desktop integration and the existing Python engine is bundled.
+**v2.0.0** — Adds signed GitHub update checks and consent-based installation. Includes the v1.10.1 fixes for issue-based PDF naming, metadata, and existing issues across older destination layouts.
+
+A Tauri desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer. The interface uses React and TypeScript; Rust retains desktop integration and the existing Python engine is bundled.
 
 ## Download
 
@@ -10,11 +12,24 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 |----------|------|
 | Windows  | `TrainsDownloader-windows.exe` portable, or `TrainsDownloader-windows-setup.exe` installer |
 | Linux    | `TrainsDownloader-linux.AppImage` → mark executable → run |
-| macOS    | `TrainsDownloader-macos.dmg` → copy the application to a writable folder → run |
+| macOS (Apple Silicon) | `TrainsDownloader-macos.dmg` → copy the application to a writable folder → run |
+| macOS (Intel) | `TrainsDownloader-macos-x86_64.dmg` → copy the application to a writable folder → run |
 
 > **Requirements:** Google Chrome for downloads. The Windows portable application also needs [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/); the per-user installer supplies its bootstrapper. Python is bundled. The matching ChromeDriver is downloaded automatically on first run.
 
 > **macOS note:** Right-click the app and choose **Open** the first time to bypass Gatekeeper.
+
+---
+
+## Updating
+
+The app checks GitHub for a newer stable release at startup and from **Settings → Check for updates**. It shows the release notes and waits for your approval before downloading or installing. Signed updates install and restart the app. If GitHub cannot be reached, the rest of the app remains available and Settings shows the check error.
+
+Windows portable users receive a link to the portable executable. Close the app, replace the executable in its current folder, and keep the files beside it to retain settings and downloads.
+
+If you are using an existing v1.x release, install v2.0.0 manually once from the [Releases](../../releases/latest) page. Older builds do not include the updater. Later signed releases can be installed from the app after you approve them.
+
+Release signing and rollout instructions are in [docs/UPDATES.md](docs/UPDATES.md).
 
 ---
 
@@ -33,6 +48,7 @@ Pre-built executables are available on the [Releases](../../releases/latest) pag
 ## Features
 
 - **Desktop interface** — equal Magazines, Track Plans, and Organize work areas, readable text, shared settings, independent scrolling, and pinned workflow actions
+- **Built-in updates** — checks GitHub at startup or from Settings, then installs a signed release only after you approve it
 - **Track Plan Database download** — a separate workflow scans the paginated [Model Railroader Track Plan Database](https://www.trains.com/mrr/how-to/track-plan-database/) and downloads each plan PDF under its original filename to an independent folder; existing downloads are skipped on later runs
 - **Visible organizer results** — moved, existing, unrecognized, corrupt, conflict, metadata, and missing-issue counts are shown in the workspace
 - **All three download modes** handled automatically:
@@ -113,7 +129,7 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install -r requirements-dev.txt pyinstaller
+pip install -r requirements-dev.txt
 ```
 
 On Windows, run `build.bat` to check and package the Tauri app and Python worker. Outputs use a fresh folder under `dist/desktop-*`; existing build and distribution artifacts are preserved. For Linux and macOS, use the GitHub Actions matrix. Development: install dependencies with `npm ci` inside `desktop-ui`, then run `npm run tauri -- dev`. A debug build without an embedded worker displays a useful job-start failure; build the Python worker and set `TRAINSDOWNLOADER_WORKER` for real download jobs. Never use live account/library data for UI checks.
@@ -167,7 +183,7 @@ worker_main.py                 # bundled JSON-lines worker entry point
 worker_protocol.py             # versioned worker request/response schema
 trains_app.py                  # retained Python download, organizer, and PDF engine
 requirements.txt               # runtime pip dependencies
-requirements-dev.txt           # runtime dependencies plus pytest
+requirements-dev.txt           # runtime, test, and packaging dependencies
 build.bat                      # local Windows build script
 pytest.ini                     # pytest config
 tests/

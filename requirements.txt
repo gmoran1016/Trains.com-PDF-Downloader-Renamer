@@ -1,4 +1,4 @@
-selenium>=4.6.0
-PyQt5>=5.15.0
-requests>=2.25.0
-pypdf>=3.0.0
+selenium>=4.51.0
+PyQt5>=5.15.11
+requests>=2.34.2
+pypdf>=6.21.1

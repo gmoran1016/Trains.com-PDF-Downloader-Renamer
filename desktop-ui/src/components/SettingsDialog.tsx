@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { CheckField, Button, Modal } from "./controls";
 import { desktopInvoke, errorMessage } from "../desktop";
 import type { Settings } from "../types";
+import type { UpdateCheckStatus } from "../updater";
 export function SettingsDialog({
   open,
   setOpen,
@@ -9,6 +10,11 @@ export function SettingsDialog({
   cookieExists,
   busy,
   save,
+  currentVersion,
+  updateStatus,
+  updateVersion,
+  updateError,
+  checkForUpdates,
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
@@ -16,6 +22,11 @@ export function SettingsDialog({
   cookieExists: boolean;
   busy: boolean;
   save: (changes: Partial<Settings>) => Promise<void>;
+  currentVersion: string;
+  updateStatus: UpdateCheckStatus;
+  updateVersion: string | null;
+  updateError: string;
+  checkForUpdates: () => void;
 }) {
   const [draft, setDraft] = useState(settings);
   const [error, setError] = useState("");
@@ -122,6 +133,29 @@ export function SettingsDialog({
           checked={draft.dark_mode}
           onChange={(checked) => setDraft({ ...draft, dark_mode: checked })}
         />
+      </div>
+      <div className="settings-group">
+        <h3>Updates</h3>
+        <p className="field-note">
+          Version {currentVersion || "Checking…"}
+        </p>
+        <p
+          className={updateStatus === "error" ? "inline-error" : "field-note"}
+          role={updateStatus === "error" ? "alert" : "status"}
+        >
+          {updateStatus === "checking" && "Checking GitHub for updates…"}
+          {updateStatus === "current" && "You're up to date."}
+          {updateStatus === "available" &&
+            `Update available: ${updateVersion ?? "new version"}`}
+          {updateStatus === "error" && updateError}
+          {updateStatus === "idle" && "Check GitHub for a newer release."}
+        </p>
+        <Button
+          disabled={updateStatus === "checking"}
+          onClick={checkForUpdates}
+        >
+          {updateStatus === "checking" ? "Checking…" : "Check for updates"}
+        </Button>
       </div>
       {busy && (
         <p className="field-note">

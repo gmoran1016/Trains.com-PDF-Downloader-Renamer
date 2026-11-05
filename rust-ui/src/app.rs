@@ -16,6 +16,7 @@ use std::{
         mpsc::{self, Receiver, TryRecvError},
     },
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Clone, Serialize)]
@@ -26,6 +27,7 @@ pub struct Snapshot {
     pub busy: bool,
     pub log_count: usize,
     pub error_count: usize,
+    pub warning_count: usize,
     pub cookie_file_exists: bool,
     pub organizer_summary: Option<Value>,
     pub organizer_outcome: JobOutcome,
@@ -55,6 +57,8 @@ pub struct TrainsApp {
     organizer_destination: String,
     notice: Option<String>,
     current_error: Option<String>,
+    log_sequence: u64,
+    warning_count: usize,
 }
 
 impl TrainsApp {
@@ -76,6 +80,8 @@ impl TrainsApp {
             organizer_destination: String::new(),
             notice: None,
             current_error: None,
+            log_sequence: 0,
+            warning_count: 0,
         }
     }
     pub fn set_notifier(&mut self, notifier: WorkerNotifier) {
@@ -114,6 +120,7 @@ impl TrainsApp {
             busy: !self.can_start_job(),
             log_count: self.job.logs.len(),
             error_count: self.job.errors.len(),
+            warning_count: self.warning_count,
             cookie_file_exists: std::path::Path::new(&self.settings.cookies_path).is_file(),
             organizer_summary: self.organizer_summary.clone(),
             organizer_outcome: self.organizer_outcome,
@@ -287,12 +294,17 @@ impl TrainsApp {
                     self.job.message = "Working…".into();
                 }
             }
-            WorkerEvent::Log { level, message } => self.add_log(LogEntry { level, message }),
+            WorkerEvent::Log { level, message } => self.add_log(LogEntry {
+                level,
+                message,
+                ..LogEntry::default()
+            }),
             WorkerEvent::Error { message } => {
                 self.job.message.clone_from(&message);
                 self.add_log(LogEntry {
                     level: LogLevel::Error,
                     message,
+                    ..LogEntry::default()
                 });
             }
             WorkerEvent::Progress {
@@ -353,7 +365,16 @@ impl TrainsApp {
             }
         }
     }
-    fn add_log(&mut self, entry: LogEntry) {
+    fn add_log(&mut self, mut entry: LogEntry) {
+        self.log_sequence += 1;
+        entry.id = self.log_sequence;
+        entry.timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        if entry.level == LogLevel::Warning {
+            self.warning_count += 1;
+        }
         if entry.level == LogLevel::Error {
             self.current_error = Some(entry.message.clone());
             self.job.errors.push(entry.clone());
@@ -371,6 +392,15 @@ impl TrainsApp {
         }
     }
     pub fn activity(&self, query: &str, offset: usize, limit: usize) -> ActivityPage {
+        self.filtered_activity(query, offset, limit, false)
+    }
+    pub fn filtered_activity(
+        &self,
+        query: &str,
+        offset: usize,
+        limit: usize,
+        needs_attention: bool,
+    ) -> ActivityPage {
         let query = query.trim().to_lowercase();
         let limit = limit.clamp(1, 200);
         let matching = self
@@ -378,15 +408,41 @@ impl TrainsApp {
             .logs
             .iter()
             .rev()
-            .filter(|entry| query.is_empty() || entry.message.to_lowercase().contains(&query));
+            .filter(|entry| activity_matches(entry, &query, needs_attention));
         ActivityPage {
             total: matching.clone().count(),
             entries: matching.skip(offset).take(limit).cloned().collect(),
         }
     }
+    pub fn activity_text(&self, query: &str, needs_attention: bool) -> String {
+        let query = query.trim().to_lowercase();
+        self.job
+            .logs
+            .iter()
+            .filter(|entry| activity_matches(entry, &query, needs_attention))
+            .map(|entry| {
+                let seconds = entry.timestamp_ms / 1000;
+                let level = match entry.level {
+                    LogLevel::Debug => "Detail",
+                    LogLevel::Info => "Info",
+                    LogLevel::Warning => "Warning",
+                    LogLevel::Error => "Error",
+                };
+                format!(
+                    "[{:02}:{:02}:{:02} UTC] {level}: {}",
+                    seconds / 3600 % 24,
+                    seconds / 60 % 60,
+                    seconds % 60,
+                    entry.message
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
     pub fn clear_activity(&mut self) {
         self.job.logs.clear();
         self.job.errors.clear();
+        self.warning_count = 0;
     }
     pub fn error_text(&self) -> String {
         self.job
@@ -420,4 +476,9 @@ impl TrainsApp {
         self.notice = Some(message.clone());
         Ok(message)
     }
+}
+
+fn activity_matches(entry: &LogEntry, query: &str, needs_attention: bool) -> bool {
+    (!needs_attention || matches!(entry.level, LogLevel::Warning | LogLevel::Error))
+        && (query.is_empty() || entry.message.to_lowercase().contains(query))
 }

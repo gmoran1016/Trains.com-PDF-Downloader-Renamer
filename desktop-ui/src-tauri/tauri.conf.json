@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Trains.com Archive",
-  "version": "1.10.0",
+  "version": "2.0.0",
   "identifier": "com.gmoran.trainsdownloader",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,15 +26,33 @@
       "capabilities": [
         {
           "identifier": "main",
-          "windows": ["main"],
-          "permissions": ["core:default"]
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "core:default",
+            "updater:default",
+            "process:allow-restart",
+            {
+              "identifier": "opener:allow-open-url",
+              "allow": [
+                {
+                  "url": "https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/releases/latest/download/TrainsDownloader-windows.exe"
+                }
+              ]
+            }
+          ]
         }
       ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "appimage", "dmg"],
+    "targets": [
+      "nsis",
+      "appimage",
+      "dmg"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -43,8 +61,21 @@
       "icons/icon.ico"
     ],
     "windows": {
-      "webviewInstallMode": { "type": "embedBootstrapper" },
-      "nsis": { "installMode": "currentUser" }
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFRkNFRUYxQjg5NjJDNEMKUldSTUxKYTQ4ZTc4bnJmV0VTR1pSZEJaTzBEK0wyMjU2eHR6eXM1dGJ2OGJqQk9IaFdTOU1ncHAK",
+      "endpoints": [
+        "https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/releases/latest/download/latest.json"
+      ]
     }
   }
 }

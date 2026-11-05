@@ -636,6 +636,13 @@ input::placeholder {
   padding: 4px 8px;
   font-size: 14px;
 }
+.activity-scope {
+  flex: none;
+  width: 144px;
+  min-height: 32px;
+  padding: 4px 7px;
+  font-size: 14px;
+}
 .error-count {
   font-size: 14px;
   color: var(--muted);
@@ -646,7 +653,7 @@ input::placeholder {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  font-size: 14px;
+  font-size: 16px;
   overscroll-behavior: contain;
 }
 .activity-events > p {
@@ -654,15 +661,57 @@ input::placeholder {
 }
 .log-row {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  gap: 8px;
-  padding: 4px 0;
+  grid-template-columns: 68px 134px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
 }
-.log-row > span:last-child {
+.log-content {
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+.log-time {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 24px;
+  font-variant-numeric: tabular-nums;
 }
 .log-level {
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  min-height: 24px;
+}
+.log-headline {
+  font-weight: 600;
+}
+.log-note {
+  color: var(--muted);
+  font-size: 14px;
+  margin-top: 1px;
+}
+.log-note.warning {
+  color: var(--warning);
+}
+.log-content summary {
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 14px;
+  width: fit-content;
+  padding: 2px 0;
+}
+.log-content summary:hover {
+  text-decoration: underline;
+}
+.log-details {
+  white-space: pre-wrap;
+  font-size: 14px;
+  color: var(--muted);
+  padding: 4px 0 6px;
+  line-height: 1.5;
 }
 .log-row.error .log-level {
   color: var(--error);
@@ -790,6 +839,34 @@ input::placeholder {
 .settings-group h3 {
   margin-bottom: 10px;
   color: var(--blue);
+}
+.update-notes h3 {
+  margin-bottom: 6px;
+  color: var(--blue);
+}
+.update-notes p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.portable-update-note {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--input);
+}
+.portable-update-note p + p {
+  margin-top: 6px;
+}
+.update-progress {
+  margin-top: 18px;
+}
+.update-progress p {
+  margin-bottom: 8px;
+}
+.update-progress progress {
+  width: 100%;
+  accent-color: var(--blue);
 }
 .inline-error {
   margin-top: 14px;
@@ -995,6 +1072,13 @@ input::placeholder {
   }
   .activity-toolbar {
     gap: 6px;
+  }
+  .activity-scope {
+    width: 132px;
+  }
+  .log-row {
+    grid-template-columns: 64px 112px minmax(0, 1fr);
+    gap: 8px;
   }
   .activity-search {
     max-width: none;

@@ -50,11 +50,25 @@ try {
     Run-Step $PythonPath @('-m','PyInstaller','--noconfirm','--onefile','--console','--name','TrainsDownloaderWorker','--distpath',(Join-Path $buildRoot 'worker-dist'),'--workpath',(Join-Path $buildRoot 'worker-work'),'--specpath',(Join-Path $buildRoot 'worker-spec'),'--collect-all','PyQt5','--collect-all','selenium','--collect-all','pypdf','--hidden-import','requests','--hidden-import','trains_app','worker_main.py')
     $env:TRAINSDOWNLOADER_WORKER = Join-Path $buildRoot 'worker-dist/TrainsDownloaderWorker.exe'
     Run-Step $PythonPath @('scripts/smoke_test_worker.py')
+    $tauriConfigArgs = @()
+    if (-not $env:TAURI_SIGNING_PRIVATE_KEY -or -not $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD) {
+        $localTauriConfig = Join-Path $buildRoot 'tauri-local-build.json'
+        [IO.File]::WriteAllText($localTauriConfig, '{"bundle":{"createUpdaterArtifacts":false}}', [Text.UTF8Encoding]::new($false))
+        $tauriConfigArgs = @('--config', $localTauriConfig)
+        Write-Warning 'Updater signatures are disabled for this local build because signing secrets are not set.'
+    }
     Push-Location desktop-ui
-    try { Run-Step $npm @('run','tauri','--','build','--bundles','nsis') } finally { Pop-Location }
+    try {
+        $installerBuildArgs = @('run','tauri','--','build','--bundles','nsis') + $tauriConfigArgs
+        Run-Step $npm $installerBuildArgs
+        $portableBuildArgs = @('run','tauri','--','build','--no-bundle','--features','portable') + $tauriConfigArgs
+        Run-Step $npm $portableBuildArgs
+    } finally { Pop-Location }
     Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/trains-desktop.exe') -Destination (Join-Path $distRoot 'TrainsDownloader-windows.exe')
-    $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter '*.exe' -File)
-    if ($installers.Count -ne 1) { throw 'Expected one Windows installer.' }
+    $appVersion = (Get-Content -LiteralPath (Join-Path $projectRoot 'desktop-ui/package.json') -Raw | ConvertFrom-Json).version
+    $installerPattern = '*_' + $appVersion + '_x64-setup.exe'
+    $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter $installerPattern -File)
+    if ($installers.Count -ne 1) { throw "Expected one Windows installer for version $appVersion." }
     Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $distRoot 'TrainsDownloader-windows-setup.exe')
     & (Join-Path $projectRoot 'scripts/verify-desktop-release.ps1') -ExecutablePath (Join-Path $distRoot 'TrainsDownloader-windows.exe')
     Write-Host ('Build complete: ' + (Join-Path $projectRoot ('dist/desktop-' + $runId)))

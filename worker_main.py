@@ -192,6 +192,19 @@ def _engine_log_level(message: str) -> str:
     """Map legacy worker log text to the severity shown by the Rust UI."""
 
     normalized = message.strip().casefold()
+    # Organizer headlines carry the outcome; path and exception details do not
+    # change its severity because of words in a filename.
+    headline = normalized.partition("\n")[0]
+    if headline.startswith("[error]"):
+        return "error"
+    if headline.startswith(("[conflict]", "[corrupt]", "[unrecognized]", "[warning]")):
+        return "warning"
+    if headline.startswith(("[moved]", "[unchanged]", "[stage]", "[coverage]", "[summary]")):
+        needs_attention = any(
+            line.startswith(("metadata warning:", "scan: partial"))
+            for line in normalized.splitlines()[1:]
+        )
+        return "warning" if needs_attention else "info"
     error_markers = (
         "failed:",
         "failure:",
@@ -202,7 +215,9 @@ def _engine_log_level(message: str) -> str:
         "archive scan incomplete",
         "finished with failures",
     )
-    return "error" if any(marker in normalized for marker in error_markers) else "info"
+    if any(marker in normalized for marker in error_markers):
+        return "error"
+    return "warning" if normalized.startswith("warning:") else "info"
 
 
 def run_job(
