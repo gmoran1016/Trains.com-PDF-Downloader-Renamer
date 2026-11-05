@@ -46,7 +46,11 @@ The form may scroll in small windows. Navigation, primary actions, Activity togg
 
 Job labels: Ready, Running, Complete, No results, Failed, Cancelled. Progress comes only from worker events. Stop remains available until the worker process has finished. Settings shown in the form must save before the next job starts. Failed saves remain visible and cannot silently use older options.
 
-Organizer results retain every count, missing-issue row, and full report. Failed or cancelled scans keep their findings and do not offer Download Missing. That action requires a successful complete scan, one known publication, missing issues, and the same destination. Activity retains the full session in Rust and renders 100 filtered events per page; copying errors uses the native clipboard.
+Organizer results retain every count, missing-issue row, and full report. Failed or cancelled scans keep their findings and do not offer Download Missing. That action requires a successful complete scan, one known publication, missing issues, and the same destination.
+
+Activity shows local timestamps and renders 100 filtered events per page while Rust retains the full session. All activity and Needs attention share the same text search. Needs attention includes errors, conflicts, unreadable or unrecognized files, metadata warnings, and partial results. Copy log copies every matching event in chronological order, including full paths and details; Copy errors retains its separate error-only action. Both use the native clipboard.
+
+Organize reports scanning, file processing, and issue coverage as distinct stages. Every processed file has one outcome row with its filename and an explicit action: Moved, Already organized, Conflict, Unreadable PDF, or Skipped. Paths and recovery advice are available under Details. Metadata warnings stay with the file outcome. Coverage and the closing count summary label cancelled or incomplete scans as partial; no missing-issue inference changes.
 
 ## Verification
 

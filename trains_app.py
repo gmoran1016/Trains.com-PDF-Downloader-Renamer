@@ -752,7 +752,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "1.10.1"
+APP_VERSION = "2.0.0"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -1188,6 +1188,7 @@ def organize_pdfs(
     log_fn=None,
     progress_fn=None,
     cancel_event: threading.Event | None = None,
+    status_fn=None,
 ):
     """
     Move and rename PDFs from source_dir into dest_dir/YYYY/ subfolders.
@@ -1196,15 +1197,33 @@ def organize_pdfs(
     progress_fn, if provided, is called with (current, total) after each file is processed.
     """
     def _log(msg):
-        logger.info(msg)
+        if msg.startswith("[error]"):
+            level = logging.ERROR
+        elif msg.startswith(("[conflict]", "[corrupt]", "[unrecognized]", "[warning]")) or "\nMetadata warning:" in msg or "\nScan: Partial" in msg:
+            level = logging.WARNING
+        else:
+            level = logging.INFO
+        logger.log(level, msg)
         if log_fn:
             log_fn(msg)
 
+    def _status(message):
+        if status_fn:
+            status_fn(message.partition("\n")[0])
+
+    def _stage(message):
+        _log(f"[stage] {message}")
+        _status(message)
+
     summary = OrganizeSummary()
+    _stage(f"Scanning folders for PDFs.\nSource: {source_dir}\nDestination: {dest_dir}")
 
     def _walk_error(error: OSError) -> None:
         summary.scan_complete = False
-        _log(f"  [error] Could not scan a source folder: {error}")
+        _log(
+            f"[error] Could not scan a source folder.\nFolder: {error.filename or source_dir}"
+            f"\nReason: {error}\nAction: Check folder access, then scan again."
+        )
 
     # Pre-collect all PDF paths so we can report total progress. os.walk
     # reports inaccessible directories through onerror; keep files already
@@ -1218,8 +1237,22 @@ def organize_pdfs(
             if fname.lower().endswith(".pdf"):
                 all_pdfs.append((root, fname))
     total_pdfs = len(all_pdfs)
+    _stage(f"Organizing {total_pdfs} {'PDF' if total_pdfs == 1 else 'PDFs'}.")
+    if progress_fn:
+        progress_fn(0, total_pdfs)
 
     issues_by_prefix_year: dict[str, dict[str, set[str]]] = {}
+
+    def _metadata_details(path, mname, year):
+        warnings = []
+        updated = _stamp_pdf_metadata(path, mname, year, warn_fn=warnings.append)
+        if updated:
+            summary.metadata_stamped += 1
+        if warnings:
+            return "\n".join(f"Metadata warning: {warning.strip()}" for warning in warnings)
+        if not _PYPDF_AVAILABLE:
+            return "Metadata warning: PDF metadata support is unavailable; metadata was not updated."
+        return "Metadata: Updated." if updated else "Metadata: No update needed."
 
     def _record_issue(prefix: str, year: str, mname: str | None) -> None:
         months = issues_by_prefix_year.setdefault(prefix, {}).setdefault(year, set())
@@ -1233,20 +1266,30 @@ def organize_pdfs(
     for file_idx, (root, fname) in enumerate(all_pdfs):
         if cancel_event is not None and cancel_event.is_set():
             summary.scan_complete = False
-            _log("  Organizer stopped; keeping the partial summary.")
+            _log("[warning] Organization stopped. Completed files have been kept; results are partial.")
             break
         fpath = os.path.join(root, fname)
+        _status(f"Organizing PDF {file_idx + 1} of {total_pdfs}: {fname}")
         try:
             parsed = parse_pdf_filename(fpath, hint_prefix)
             if not parsed:
-                _log(f"  Skipping (unrecognized, no date found in filename or PDF content): {fname}")
+                _log(
+                    f"[unrecognized] {fname}\nFile: {fpath}"
+                    "\nReason: No publication date found in the filename or PDF content."
+                    "\nOutcome: Left in place."
+                    "\nAction: Add the publication and issue date to the filename, then try again."
+                )
                 summary.unrecognized += 1
                 continue
             new_stem, year, mname = parsed
             prefix = new_stem.split("-", 1)[0].upper()
 
             if not _verify_pdf(fpath):
-                _log(f"  [corrupt] {fname} — left in place")
+                _log(
+                    f"[corrupt] {fname}\nFile: {fpath}"
+                    "\nOutcome: Left in place; the PDF could not be read."
+                    "\nAction: Check the PDF or obtain a readable copy before trying again."
+                )
                 summary.corrupt += 1
                 continue
 
@@ -1268,15 +1311,17 @@ def organize_pdfs(
                 or os.path.normcase(os.path.abspath(fpath))
                 == os.path.normcase(os.path.abspath(expected_path))
             ):
-                if is_duplicate_variant and os.path.exists(expected_path):
+                conflict = is_duplicate_variant and os.path.exists(expected_path)
+                if conflict:
                     summary.conflicts += 1
+                metadata = _metadata_details(fpath, mname, year)
+                if conflict:
                     _log(
-                        f"  [conflict] {fname} — duplicate preserved alongside "
-                        f"{os.path.basename(expected_path)}"
+                        f"[conflict] {fname}\nFile: {fpath}\nExisting issue: {expected_path}"
+                        f"\nOutcome: Already in the archive; both files preserved.\n{metadata}"
                     )
-                if _stamp_pdf_metadata(fpath, mname, year, warn_fn=_log):
-                    _log(f"  Metadata updated: {fname}")
-                    summary.metadata_stamped += 1
+                else:
+                    _log(f"[unchanged] {fname}\nFile: {fpath}\n{metadata}")
                 summary.already_correct += 1
                 continue
             os.makedirs(year_dir, exist_ok=True)
@@ -1284,25 +1329,30 @@ def organize_pdfs(
             dest_path = _unique_path(expected_path)
             if has_conflict:
                 summary.conflicts += 1
-                _log(
-                    f"  [conflict] {fname} — canonical issue exists; preserving as "
-                    f"{os.path.basename(dest_path)}"
-                )
             shutil.move(fpath, dest_path)
-            if _stamp_pdf_metadata(dest_path, mname, year, warn_fn=_log):
-                summary.metadata_stamped += 1
-            if not has_conflict:
-                _log(f"  {fname}  →  {dest_path}")
+            metadata = _metadata_details(dest_path, mname, year)
+            if has_conflict:
+                _log(
+                    f"[conflict] {os.path.basename(dest_path)}\nSource: {fpath}"
+                    f"\nDestination: {dest_path}\nExisting issue: {expected_path}"
+                    f"\nOutcome: Moved with an alternate filename; both files preserved.\n{metadata}"
+                )
+            else:
+                _log(f"[moved] {os.path.basename(dest_path)}\nSource: {fpath}\nDestination: {dest_path}\n{metadata}")
             summary.moved += 1
         except Exception as error:
             summary.scan_complete = False
-            _log(f"  [error] Could not process {fname}: {error}")
+            _log(
+                f"[error] Could not process {fname}\nFile: {fpath}\nReason: {error}"
+                "\nAction: Review the file and folder access before trying again."
+            )
         finally:
             _emit_progress(file_idx)
 
     if cancel_event is not None and cancel_event.is_set():
         summary.scan_complete = False
 
+    _stage("Checking issue coverage." if summary.scan_complete else "Checking issue coverage from partial results.")
     # Determine expected months independently for each observed publication.
     today = datetime.date.today()
     for prefix in sorted(issues_by_prefix_year):
@@ -1315,6 +1365,11 @@ def organize_pdfs(
                 summary.missing_by_prefix_year.setdefault(prefix, {})[year] = []
                 summary.report.append(
                     f"{prefix} {year}: schedule unknown/seasonal; completeness not inferred"
+                )
+                _log(
+                    f"[coverage] {PREFIX_TO_TITLE.get(prefix, prefix)} · {year}: schedule unknown."
+                    "\nCompleteness is not inferred for this publication."
+                    + ("\nScan: Partial; remaining files were not checked." if not summary.scan_complete else "")
                 )
             continue
         if expected_months is None:
@@ -1329,6 +1384,12 @@ def organize_pdfs(
             summary.missing_by_prefix_year.setdefault(prefix, {})[year] = missing
             state = "complete" if not missing else f"missing {missing}"
             summary.report.append(f"{prefix} {year}: {state}")
+            coverage = f"{len(missing)} missing {'issue' if len(missing) == 1 else 'issues'}" if missing else "no gaps found"
+            _log(
+                f"[coverage] {PREFIX_TO_TITLE.get(prefix, prefix)} · {year}: {coverage}."
+                + (f"\nMissing: {', '.join(missing)}" if missing else "")
+                + ("\nScan: Partial; coverage reflects only processed files." if not summary.scan_complete else "")
+            )
     return summary
 
 
@@ -2941,6 +3002,7 @@ class OrganizeWorker(QThread):
                 log_fn=self.signals.log.emit,
                 progress_fn=self.signals.progress.emit,
                 cancel_event=self._cancel_event,
+                status_fn=self.signals.status_msg.emit,
             )
         except Exception as e:
             self.outcome = OUTCOME_FAILED
@@ -2965,6 +3027,23 @@ class OrganizeWorker(QThread):
                     self.outcome = OUTCOME_NO_RESULTS
                 else:
                     self.outcome = OUTCOME_SUCCESS
+            if self.result is not None:
+                result = self.result
+                state = {
+                    OUTCOME_SUCCESS: "Organization complete",
+                    OUTCOME_NO_RESULTS: "Organization complete — no PDFs found",
+                    OUTCOME_CANCELLED: "Organization cancelled — partial results",
+                    OUTCOME_FAILED: "Organization incomplete — partial results",
+                }.get(self.outcome, "Organization finished")
+                skipped = result.unrecognized + result.corrupt
+                self.signals.log.emit(
+                    f"[summary] {state}: {result.moved} moved, {result.already_correct} already organized, {skipped} skipped."
+                    f"\nMoved: {result.moved}\nAlready organized: {result.already_correct}"
+                    f"\nUnrecognized: {result.unrecognized}\nUnreadable PDFs: {result.corrupt}"
+                    f"\nConflicts: {result.conflicts}\nMetadata updated: {result.metadata_stamped}"
+                    "\nConflicts and metadata updates can overlap moved or already organized files."
+                    + ("\nScan: Complete." if result.scan_complete else "\nScan: Partial; completed files and findings have been kept.")
+                )
             self.signals.finished.emit()
 
 

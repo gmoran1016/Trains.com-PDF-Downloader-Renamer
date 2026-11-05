@@ -480,6 +480,21 @@ def test_worker_adapts_engine_failure_log_lines_as_errors(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("message, level", [
+    ("[conflict] MRR.pdf\nOutcome: Both files preserved.", "warning"),
+    ("[corrupt] unreadable.pdf\nOutcome: Left in place.", "warning"),
+    ("[unrecognized] mystery.pdf\nReason: Publication date not found.", "warning"),
+    ("[moved] MRR.pdf\nMetadata warning: Access denied.", "warning"),
+    ("[moved] file.pdf\nSource: /archive/failed: name.pdf", "info"),
+    ("[unchanged] MRR.pdf\nMetadata: Already current.", "info"),
+    ("[coverage] MRR 2024: no gaps found.\nScan: Partial; remaining files were not checked.", "warning"),
+    ("[summary] Organization cancelled.\nScan: Partial; completed files have been kept.", "warning"),
+    ("[error] Could not process MRR.pdf\nReason: Access denied.", "error"),
+])
+def test_worker_classifies_organizer_outcomes_without_using_path_text(message, level):
+    assert _worker_main()._engine_log_level(message) == level
+
+
 def test_worker_stdio_reads_utf8_paths_when_windows_locale_is_legacy(
     tmp_path,
 ):

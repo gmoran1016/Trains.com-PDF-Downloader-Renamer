@@ -25,23 +25,30 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
+            architecture: x86_64
             bundles: nsis
           - os: ubuntu-22.04
             platform: linux
+            architecture: x86_64
             bundles: appimage
           - os: macos-latest
             platform: macos
+            architecture: aarch64
+            bundles: dmg
+          - os: macos-15-intel
+            platform: macos
+            architecture: x86_64
             bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.13'
+          python-version: "3.13"
           cache: pip
       - uses: actions/setup-node@v7
         with:
-          node-version: '24'
+          node-version: "24"
           cache: npm
           cache-dependency-path: desktop-ui/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
@@ -111,9 +118,16 @@ jobs:
       - name: Build desktop packages
         working-directory: desktop-ui
         run: npm run tauri -- build --bundles ${{ matrix.bundles }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Build Windows portable executable
+        if: runner.os == 'Windows'
+        working-directory: desktop-ui
+        run: npm run tauri -- build --no-bundle --features portable
       - name: Collect release packages
         shell: bash
-        run: python scripts/collect_desktop_packages.py --platform ${{ matrix.platform }} --target-dir build/cargo-target --output-dir dist/release
+        run: python scripts/collect_desktop_packages.py --platform ${{ matrix.platform }} --architecture ${{ matrix.architecture }} --target-dir build/cargo-target --output-dir dist/release
       - name: Verify isolated Windows startup
         if: runner.os == 'Windows'
         shell: pwsh
@@ -121,14 +135,16 @@ jobs:
       - name: Save platform packages
         uses: actions/upload-artifact@v7
         with:
-          name: desktop-${{ matrix.platform }}
-          path: dist/release/*
+          name: desktop-${{ matrix.platform }}-${{ matrix.architecture }}
+          path: |
+            dist/release/TrainsDownloader-*
+            dist/release/update-architecture-${{ matrix.platform }}-${{ matrix.architecture }}.json
           if-no-files-found: error
       - name: Save rendered-test evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ui-evidence-${{ matrix.platform }}
+          name: ui-evidence-${{ matrix.platform }}-${{ matrix.architecture }}
           path: desktop-ui/test-results/
           if-no-files-found: ignore
 
@@ -155,16 +171,18 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\n')
           PY
+      - name: Build signed update manifest
+        run: >-
+          python scripts/build_update_manifest.py
+          --release-dir dist/release
+          --version "${{ steps.version.outputs.version }}"
+          --repository "${{ github.repository }}"
+          --notes-file "docs/releases/v${{ steps.version.outputs.version }}.md"
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
-          files: dist/release/*
-          body: |
-            Tauri desktop interface with the retained bundled Python engine.
-
-            Windows: portable executable or per-user installer. The portable version requires Microsoft Edge WebView2; the installer provides its bootstrapper.
-            Linux: AppImage. macOS: application in a DMG.
-            Google Chrome is required for download jobs. Python is bundled.
-
-            To retain portable settings, place the new app in the same writable folder as the previous app and its data files. Keep cookie files private.
+          files: |
+            dist/release/TrainsDownloader-*
+            dist/release/latest.json
+          body_path: docs/releases/v${{ steps.version.outputs.version }}.md

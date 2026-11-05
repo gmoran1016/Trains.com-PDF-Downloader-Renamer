@@ -8,6 +8,11 @@ export async function desktopFixture(
     summary?: boolean;
     incomplete?: boolean;
     failSetting?: string;
+    organizerActivity?: boolean;
+    update?: { version: string; notes?: string | null } | null;
+    updateError?: string;
+    installError?: string;
+    portable?: boolean;
   } = {},
 ) {
   await page.addInitScript((options) => {
@@ -72,6 +77,7 @@ export async function desktopFixture(
       },
       log_count: 0,
       error_count: 0,
+      warning_count: 0,
       cookie_file_exists: true,
       organizer_summary: summary,
       organizer_outcome: options.incomplete ? "failed" : "success",
@@ -80,6 +86,8 @@ export async function desktopFixture(
       tray_available: true,
     };
     let logs = Array.from({ length: 260 }, (_, index) => ({
+      id: 260 - index,
+      timestamp_ms: Date.now() - index * 1000,
       level: index % 20 === 0 ? "error" : "info",
       message:
         index % 20 === 0
@@ -88,8 +96,48 @@ export async function desktopFixture(
     }));
     current.log_count = logs.length;
     current.error_count = 13;
+    if (options.organizerActivity) {
+      current.settings.selected_page = "organize";
+      current.job.message = "Organizing PDF 14 of 42: MRR-03-March-2024.pdf";
+      current.job.done = 14;
+      current.job.total = 42;
+      logs = [
+        {
+          id: 4,
+          timestamp_ms: Date.now(),
+          level: "warning",
+          message:
+            "[conflict] MRR-01-January-2024-1.pdf\nSource: D:/Unsorted PDFs/a very long folder name/January 2024.pdf\nDestination: D:/Organized archive/2024/MRR-01-January-2024-1.pdf\nExisting issue: D:/Organized archive/2024/MRR-01-January-2024.pdf\nOutcome: Moved with an alternate filename; both files preserved.",
+        },
+        {
+          id: 3,
+          timestamp_ms: Date.now() - 1000,
+          level: "info",
+          message:
+            "[moved] MRR-03-March-2024.pdf\nSource: D:/Unsorted PDFs/March 2024.pdf\nDestination: D:/Organized archive/2024/MRR-03-March-2024.pdf\nMetadata: Updated.",
+        },
+        {
+          id: 2,
+          timestamp_ms: Date.now() - 2000,
+          level: "warning",
+          message:
+            "[corrupt] MRR-2024-04.pdf\nFile: D:/Unsorted PDFs/MRR-2024-04.pdf\nOutcome: Left in place; the PDF could not be read.",
+        },
+        {
+          id: 1,
+          timestamp_ms: Date.now() - 3000,
+          level: "info",
+          message:
+            "[stage] Organizing 42 PDFs.\nSource: D:/Unsorted PDFs\nDestination: D:/Organized archive",
+        },
+      ];
+      current.log_count = logs.length;
+      current.error_count = 0;
+      current.warning_count = 2;
+    }
     const listeners = new Map<string, Set<(value: unknown) => void>>();
     const records: { command: string; args: Record<string, unknown> }[] = [];
+    const updaterRecords: { action: string; url?: string }[] = [];
     let streamTimer: ReturnType<typeof setInterval> | undefined;
     const emit = () =>
       listeners
@@ -104,6 +152,8 @@ export async function desktopFixture(
         const append = () => {
           sequence += 1;
           logs.unshift({
+            id: logs.length + 1,
+            timestamp_ms: Date.now(),
             level: sequence === 1 ? "error" : "info",
             message: "Streaming event " + sequence,
           });
@@ -125,6 +175,7 @@ export async function desktopFixture(
       },
       invoke: async (command: string, args: Record<string, unknown> = {}) => {
         records.push({ command, args });
+        if (command === "is_portable") return !!options.portable;
         if (command === "get_snapshot") return structuredClone(current);
         if (command === "update_settings") {
           if (
@@ -153,10 +204,14 @@ export async function desktopFixture(
           return structuredClone(current);
         }
         if (command === "get_activity") {
-          const matches = logs.filter((log) =>
-            log.message
-              .toLowerCase()
-              .includes(String(args.query || "").toLowerCase()),
+          const matches = logs.filter(
+            (log) =>
+              (!args.needsAttention ||
+                log.level === "warning" ||
+                log.level === "error") &&
+              log.message
+                .toLowerCase()
+                .includes(String(args.query || "").toLowerCase()),
           );
           return {
             entries: matches.slice(
@@ -170,12 +225,17 @@ export async function desktopFixture(
           logs = [];
           current.log_count = 0;
           current.error_count = 0;
+          current.warning_count = 0;
           emit();
           return structuredClone(current);
         }
         if (command === "choose_path") return "D:/Selected folder";
         if (command === "clear_cache") return "Download cache cleared.";
-        if (command === "copy_errors" || command === "close_action")
+        if (
+          command === "copy_errors" ||
+          command === "copy_activity" ||
+          command === "close_action"
+        )
           return null;
         throw new Error("Unexpected desktop command: " + command);
       },
@@ -183,5 +243,32 @@ export async function desktopFixture(
         listeners.get("close-requested")?.forEach((listener) => listener(null)),
     };
     (window as unknown as { __TRAINS_QA__: typeof qa }).__TRAINS_QA__ = qa;
+    (window as any).__TRAINS_UPDATER_QA__ = {
+      records: updaterRecords,
+      getVersion: async () => "2.0.0",
+      isPortable: async () => !!options.portable,
+      check: async () => {
+        updaterRecords.push({ action: "check" });
+        if (options.updateError) throw new Error(options.updateError);
+        return options.update ?? null;
+      },
+      install: async (
+        onProgress: (progress: { downloaded: number; total: number | null }) => void,
+      ) => {
+        updaterRecords.push({ action: "install" });
+        onProgress({ downloaded: 0, total: 100 });
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        onProgress({ downloaded: 65, total: 100 });
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        if (options.installError) throw new Error(options.installError);
+        onProgress({ downloaded: 100, total: 100 });
+      },
+      relaunch: async () => {
+        updaterRecords.push({ action: "relaunch" });
+      },
+      openUrl: async (url: string) => {
+        updaterRecords.push({ action: "openUrl", url });
+      },
+    };
   }, options);
 }

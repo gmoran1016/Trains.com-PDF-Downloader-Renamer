@@ -25,6 +25,8 @@ export interface Settings {
 export interface LogEntry {
   level: "debug" | "info" | "warning" | "error";
   message: string;
+  id?: number;
+  timestamp_ms?: number;
 }
 export interface OrganizerSummary {
   scan_complete?: boolean;
@@ -52,6 +54,7 @@ export interface Snapshot {
   };
   log_count: number;
   error_count: number;
+  warning_count?: number;
   cookie_file_exists: boolean;
   organizer_summary: OrganizerSummary | null;
   organizer_outcome: Outcome;

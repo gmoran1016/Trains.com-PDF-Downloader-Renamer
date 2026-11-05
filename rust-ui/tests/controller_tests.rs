@@ -63,6 +63,48 @@ fn activity_is_paged_without_losing_history_and_snapshot_is_small() {
 }
 
 #[test]
+fn activity_timestamps_and_attention_filter_keep_full_copyable_details() {
+    let root = tempfile::tempdir().unwrap();
+    let mut app = TrainsApp::new(root.path().into(), Box::new(UnavailableWorker));
+    for index in 0..205 {
+        app.apply_worker_event(WorkerEvent::Log {
+            level: if index % 2 == 0 {
+                LogLevel::Warning
+            } else {
+                LogLevel::Info
+            },
+            message: format!("File {index}\nSource: /archive/folder {index}/issue.pdf"),
+        });
+    }
+    app.apply_worker_event(WorkerEvent::Error {
+        message: "Cannot read source folder".into(),
+    });
+    let warnings = app.filtered_activity("/archive/folder", 0, 100, true);
+    assert_eq!(warnings.total, 103);
+    assert_eq!(warnings.entries.len(), 100);
+    let older = app.filtered_activity("/archive/folder", 100, 100, true);
+    assert_eq!(older.entries.len(), 3);
+    let stamp = serde_json::to_value(&warnings.entries[0]).unwrap();
+    assert!(stamp["timestamp_ms"].as_u64().unwrap() > 0);
+    assert_eq!(app.snapshot().warning_count, 103);
+    assert_eq!(app.snapshot().error_count, 1);
+    let text = app.activity_text("", true);
+    assert!(text.find("File 0\n").unwrap() < text.find("File 204\n").unwrap());
+    assert!(text.contains("Source: /archive/folder 0/issue.pdf"));
+    assert!(text.contains("Cannot read source folder"));
+    assert!(!text.contains("File 1\n"));
+    assert_eq!(
+        app.activity_text("folder 204", true)
+            .matches("File 204\n")
+            .count(),
+        1
+    );
+    app.clear_activity();
+    assert_eq!(app.snapshot().warning_count, 0);
+    assert_eq!(app.activity_text("", false), "");
+}
+
+#[test]
 fn incomplete_organizer_result_is_retained_as_failure() {
     let root = tempfile::tempdir().unwrap();
     let mut app = TrainsApp::new(root.path().into(), Box::new(UnavailableWorker));
