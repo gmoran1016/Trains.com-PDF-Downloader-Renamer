@@ -6,7 +6,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { desktopInvoke } from "./desktop";
 
 export const PORTABLE_DOWNLOAD_URL =
-  "https://github.com/gmoran1016/Trains.com-Magazine-Downloader/releases/latest/download/TrainsDownloader-windows.exe";
+  "https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/releases/latest/download/TrainsDownloader-windows.exe";
 
 export interface AvailableUpdate {
   version: string;

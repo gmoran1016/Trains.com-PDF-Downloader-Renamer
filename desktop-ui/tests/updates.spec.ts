@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { desktopFixture } from "./fixtures";
 
 const portableAsset =
-  "https://github.com/gmoran1016/Trains.com-Magazine-Downloader/releases/latest/download/TrainsDownloader-windows.exe";
+  "https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/releases/latest/download/TrainsDownloader-windows.exe";
 
 test("a startup update is offered without downloading before consent", async ({
   page,

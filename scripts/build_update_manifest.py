@@ -105,7 +105,7 @@ def main() -> None:
     parser.add_argument("--version", required=True)
     parser.add_argument(
         "--repository",
-        default="gmoran1016/Trains.com-Magazine-Downloader",
+        default="gmoran1016/Trains.com-PDF-Downloader-Renamer",
     )
     parser.add_argument("--notes-file", type=Path)
     parser.add_argument("--output", type=Path)
