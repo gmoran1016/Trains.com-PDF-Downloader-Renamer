@@ -752,7 +752,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -1657,12 +1657,15 @@ class MagazineDownloader:
 
     @staticmethod
     def _is_browser_blocked_page(driver) -> bool:
-        """Detect the small 403 page returned by the site's anti-bot layer."""
+        """Detect small 403 pages, including CloudFront's error template."""
         try:
             title = str(getattr(driver, "title", "") or "").strip().lower()
         except Exception:
             title = ""
-        if title in {"403 forbidden", "access denied", "forbidden"}:
+        if title in {"403 forbidden", "access denied", "forbidden"} or any(
+            marker in title
+            for marker in ("403 error", "request could not be satisfied")
+        ):
             return True
         try:
             source = str(getattr(driver, "page_source", "") or "").lower()
@@ -1670,7 +1673,13 @@ class MagazineDownloader:
             source = ""
         return len(source) <= 20_000 and any(
             marker in source
-            for marker in ("<title>403 forbidden", "<h1>403 forbidden", "error 403")
+            for marker in (
+                "<title>403 forbidden",
+                "<h1>403 forbidden",
+                "error 403",
+                "403 error",
+                "the request could not be satisfied",
+            )
         )
 
     def _fetch_authenticated_html(
