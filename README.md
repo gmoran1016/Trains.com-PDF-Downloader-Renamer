@@ -1,33 +1,48 @@
-# Trains.com Magazine & Track Plan Downloader
+<div align="center">
+  <img src="desktop-ui/src-tauri/icons/128x128.png" alt="PDF document icon" width="88" height="88">
+  <h1>Trains.com Magazine &amp; Track Plan Downloader</h1>
+  <p><strong>Download Trains.com magazines and track plans, then organize your PDFs in one desktop app.</strong></p>
+  <p>
+    <a href="../../releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/gmoran1016/Trains.com-PDF-Downloader-Renamer?display_name=tag&style=for-the-badge&label=Latest%20release"></a>
+  </p>
+  <p><a href="#download">Download for your platform</a> · <a href="#whats-new-in-v200">What’s new in v2.0.0</a> · <a href="#running-from-source">Build from source</a></p>
+</div>
 
-**v2.0.0** — Adds signed GitHub update checks and consent-based installation. Includes the v1.10.1 fixes for issue-based PDF naming, metadata, and existing issues across older destination layouts.
+> **Upgrading from v1.x?** Install v2.0.0 once from the [latest GitHub release](../../releases/latest). Earlier versions do not include the updater; later signed releases can be installed from the app after you approve them.
 
-A Tauri desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer. The interface uses React and TypeScript; Rust retains desktop integration and the existing Python engine is bundled.
+## Contents
+
+[Download](#download) · [What’s new](#whats-new-in-v200) · [Updating](#updating) · [Supported magazines](#supported-magazines) · [Features](#features) · [Authentication](#authentication) · [PDF naming](#pdf-naming--organization) · [Build and test](#running-from-source)
 
 ## Download
 
-Pre-built executables are available on the [Releases](../../releases/latest) page — no Python installation required.
+Choose the package for your computer. Python is bundled, so you do not need to install it separately.
 
-| Platform | File |
-|----------|------|
-| Windows  | `TrainsDownloader-windows.exe` portable, or `TrainsDownloader-windows-setup.exe` installer |
-| Linux    | `TrainsDownloader-linux.AppImage` → mark executable → run |
-| macOS (Apple Silicon) | `TrainsDownloader-macos.dmg` → copy the application to a writable folder → run |
-| macOS (Intel) | `TrainsDownloader-macos-x86_64.dmg` → copy the application to a writable folder → run |
+| Platform | Download | First run |
+|----------|----------|-----------|
+| Windows portable | [Download `.exe`](../../releases/latest/download/TrainsDownloader-windows.exe) | Extract and run; keep the app beside its data files. |
+| Windows installer | [Download setup](../../releases/latest/download/TrainsDownloader-windows-setup.exe) | Per-user install; includes the WebView2 bootstrapper. |
+| Linux | [Download AppImage](../../releases/latest/download/TrainsDownloader-linux.AppImage) | Mark the file executable, then run it. |
+| macOS · Apple Silicon | [Download `.dmg`](../../releases/latest/download/TrainsDownloader-macos.dmg) | Copy the app to a writable folder. |
+| macOS · Intel | [Download `.dmg`](../../releases/latest/download/TrainsDownloader-macos-x86_64.dmg) | Copy the app to a writable folder. |
 
-> **Requirements:** Google Chrome for downloads. The Windows portable application also needs [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/); the per-user installer supplies its bootstrapper. Python is bundled. The matching ChromeDriver is downloaded automatically on first run.
+All files are also listed on the [Releases page](../../releases/latest). Downloads require Google Chrome; the matching ChromeDriver is downloaded automatically. The Windows portable app also needs [Microsoft Edge WebView2](https://developer.microsoft.com/microsoft-edge/webview2/).
 
-> **macOS note:** Right-click the app and choose **Open** the first time to bypass Gatekeeper.
+> **macOS:** On first launch, right-click the app and choose **Open** to bypass Gatekeeper.
 
----
+## What’s new in v2.0.0
+
+- **Built-in updater:** checks GitHub at startup or from Settings, shows release notes, and installs signed updates only after you approve them.
+- **More reliable downloads:** filenames and PDF metadata use issue details, and existing issues are recognized across supported destination layouts to prevent duplicate downloads on later runs.
+- **Safer install options:** Windows portable users get the portable executable and replacement instructions; existing v1.x users can install this version manually once.
+
+See the [full v2.0.0 release notes](docs/releases/v2.0.0.md).
 
 ## Updating
 
 The app checks GitHub for a newer stable release at startup and from **Settings → Check for updates**. It shows the release notes and waits for your approval before downloading or installing. Signed updates install and restart the app. If GitHub cannot be reached, the rest of the app remains available and Settings shows the check error.
 
 Windows portable users receive a link to the portable executable. Close the app, replace the executable in its current folder, and keep the files beside it to retain settings and downloads.
-
-If you are using an existing v1.x release, install v2.0.0 manually once from the [Releases](../../releases/latest) page. Older builds do not include the updater. Later signed releases can be installed from the app after you approve them.
 
 Release signing and rollout instructions are in [docs/UPDATES.md](docs/UPDATES.md).
 
@@ -47,31 +62,31 @@ Release signing and rollout instructions are in [docs/UPDATES.md](docs/UPDATES.m
 
 ## Features
 
-- **Desktop interface** — equal Magazines, Track Plans, and Organize work areas, readable text, shared settings, independent scrolling, and pinned workflow actions
-- **Built-in updates** — checks GitHub at startup or from Settings, then installs a signed release only after you approve it
-- **Track Plan Database download** — a separate workflow scans the paginated [Model Railroader Track Plan Database](https://www.trains.com/mrr/how-to/track-plan-database/) and downloads each plan PDF under its original filename to an independent folder; existing downloads are skipped on later runs
-- **Visible organizer results** — moved, existing, unrecognized, corrupt, conflict, metadata, and missing-issue counts are shown in the workspace
-- **All three download modes** handled automatically:
-  - Recent issues via direct PDF link (downloaded in parallel — up to 3 at once)
-  - Mid-era issues via the embedded flipbook reader
-  - Very old digitised-only issues skipped gracefully
-- **Resumable downloads** — progress is saved; already-downloaded issues are skipped on subsequent runs
-- **Cookie-based authentication** — log in once and reuse the shared session for magazine and track plan downloads
-- **Authenticated HTTP fallback** — if ChromeDriver receives Trains.com's anti-bot 403 page, saved authenticated cookies are used for archive discovery and direct PDF downloads
-- **Truthful archive discovery** — temporary request failures are retried; a blocked or interrupted archive scan is reported as a failure, preserves issues already found, and never appears as a complete or empty scan
-- **Settings persistence** — magazine and track plan folders, cookie path, headless mode, sort order, and magazine selections are remembered between sessions
-- **Per-magazine progress** — Activity shows the worker's actual issue counts and status; it starts compact and can be expanded or resized
-- **System tray** — minimizes to the system tray; right-click the tray icon to show the window or quit. Closing the window while a download is running prompts to minimize to tray, stop and quit, or cancel
-- **Built-in PDF organizer** — renames and sorts PDFs into `YYYY/` subfolders with consistent naming (`MRR-01-January-2024.pdf`)
-- **PDF integrity verification** — downloaded files are validated with pypdf; corrupt or truncated organizer inputs stay in the source folder and are reported instead of being moved
-- **Conflict-safe organization** — duplicate issue targets are preserved with an explicit conflict count and log entry
-- **PDF metadata stamping** — writes correct Title, Subject, Keywords, and Creation Date into each PDF's info dictionary and XMP metadata
-- **Smart completeness report** — after organizing, lists missing issues per magazine and year using known publication schedules; seasonal/variable archives are reported without inventing monthly gaps
-- **Download missing issues** — after a single-magazine organization run, fetch only the missing issues using the same download engine
-- **Activity history** — filter the full retained session, page through events, review error counts, copy failures, and explicitly clear history; status labels accompany colors
-- **Sort order** — choose newest-first or oldest-first
-- **Test mode** — scans only the first 3 archive pages for quick testing
-- **Headless mode** — hide the browser window (requires valid saved cookies)
+### Download
+
+- Handle the three magazine download modes: direct PDF links for recent issues, embedded flipbook downloads for mid-era issues, and graceful skips for digitised-only issues.
+- Download up to three recent issues in parallel; progress is saved so later runs can resume and skip completed issues.
+- Scan the paginated [Model Railroader Track Plan Database](https://www.trains.com/mrr/how-to/track-plan-database/) and save plans under their original filenames in a separate folder. Existing downloads are skipped.
+- Reuse one signed-in browser session for magazines and track plans. If ChromeDriver hits Trains.com’s anti-bot 403 page, authenticated cookies can be used for archive discovery and direct PDF downloads.
+- Retry temporary archive failures and report blocked or interrupted scans as failures, preserving issues already found.
+- Remember magazine and track plan folders, cookie path, headless mode, sort order, and magazine selections. Choose newest-first or oldest-first; use test mode to scan only the first three archive pages.
+
+### Organize PDFs
+
+- Rename and sort PDFs into `YYYY/` folders with consistent names such as `MRR-01-January-2024.pdf`.
+- Stamp PDF info and XMP metadata with Title, Subject, Keywords, and Creation Date.
+- Verify PDF integrity; keep corrupt or truncated inputs in place and report them for recovery.
+- Preserve destination conflicts and report moved, existing, unrecognized, corrupt, metadata, and missing-issue counts.
+- Report missing issues by magazine and year using known publication schedules; seasonal and variable archives do not receive invented monthly gaps. Fetch missing issues after organizing a single magazine.
+
+### Desktop app
+
+- Use separate Magazines, Track Plans, and Organize work areas with shared settings, readable text, independent scrolling, and pinned workflow actions.
+- View per-magazine issue counts and status in Activity; expand or resize the progress area.
+- Filter retained activity, page through events, review error counts, copy failures, and clear history explicitly. Status labels accompany colors.
+- Minimize to the system tray. Closing during a download offers to minimize, stop and quit, or cancel.
+- Install signed GitHub updates only after reviewing the release notes and approving the update.
+- Sign in through visible Chrome when needed; headless mode requires valid saved cookies.
 
 ---
 
@@ -159,16 +174,17 @@ Output: portable and installer applications in a run-specific `dist\desktop-*` f
 
 ### GitHub Actions
 
-Every push to `main` runs [`.github/workflows/build.yml`](.github/workflows/build.yml). The matrix checks Python, Rust, rendered UI interactions, formatting, and lint; it embeds the Python worker and creates desktop packages. Publication waits for every platform to succeed:
+Pushes to `main` or `master` run [`.github/workflows/build.yml`](.github/workflows/build.yml). The four-platform matrix checks Python, Rust, rendered UI interactions, formatting, and lint; it embeds the Python worker and builds Windows, Linux, and macOS packages. A manual run stores build artifacts by default. When **publish** is enabled, the workflow waits for every platform to pass, generates the signed updater manifest, and publishes the versioned GitHub release.
 
-| Platform | GitHub Release asset |
-|----------|----------------------|
-| Windows  | `TrainsDownloader-windows.exe` |
+| Platform | GitHub Release download |
+|----------|-------------------------|
+| Windows portable | `TrainsDownloader-windows.exe` |
 | Windows installer | `TrainsDownloader-windows-setup.exe` |
-| Linux    | `TrainsDownloader-linux.AppImage` |
-| macOS    | `TrainsDownloader-macos.dmg` |
+| Linux | `TrainsDownloader-linux.AppImage` |
+| macOS · Apple Silicon | `TrainsDownloader-macos.dmg` |
+| macOS · Intel | `TrainsDownloader-macos-x86_64.dmg` |
 
-The workflow is also available through **Actions → Build Desktop Applications → Run workflow**. Manual runs save artifacts; enable **publish** to release them after all checks pass. Linux builds use Ubuntu 22.04 as their baseline. macOS packages are unsigned unless signing is configured. Local Windows verification does not establish Linux/macOS runtime behavior; see [verification evidence](docs/tauri-ui-verification.md). Build outputs, dependencies, runtime state, and downloaded files are excluded from Git.
+The workflow is available through **Actions → Build Desktop Applications → Run workflow**. Linux builds use Ubuntu 22.04 as their baseline. macOS DMGs are unsigned unless Apple signing is configured; updater archives are signed with the Tauri key. Local Windows verification does not establish Linux/macOS runtime behavior; see [verification evidence](docs/tauri-ui-verification.md). Build outputs, dependencies, runtime state, and downloaded files are excluded from Git.
 
 ---
 
@@ -191,7 +207,7 @@ tests/
   test_worker_protocol.py      # JSON-lines protocol validation
   test_worker_integration.py   # worker adapter and subprocess tests
 rust-ui/tests/                 # Rust controller, state, settings and protocol tests
-.github/workflows/build.yml    # GitHub Actions — builds exe for all platforms on push to main
+.github/workflows/build.yml    # GitHub Actions — cross-platform checks, builds, and release publishing
 docs/superpowers/              # design specs and implementation plans
 docs/usability-audit-2026-08-08.md  # QA findings and remediation evidence
 ```
