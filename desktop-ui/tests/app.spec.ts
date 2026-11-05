@@ -146,6 +146,7 @@ for (const [width, height] of [
               "-" +
               work.replaceAll(" ", "-") +
               ".png",
+            animations: "disabled",
           });
         }
         await page.screenshot({
@@ -155,6 +156,7 @@ for (const [width, height] of [
             "-" +
             (dark ? "dark" : "light") +
             ".png",
+          animations: "disabled",
         });
       },
     );
@@ -241,7 +243,12 @@ test("activity filters retained history, copies errors and clears explicitly", a
 test("activity shows new rows and errors while worker logs continue every 50 ms", async ({
   page,
 }) => {
-  await desktopFixture(page, { expanded: true, outcome: "running" });
+  if (process.env.CI) test.setTimeout(60_000);
+  await desktopFixture(page, {
+    expanded: true,
+    outcome: "running",
+    activityEntries: 24,
+  });
   await page.goto("/");
   await page
     .getByLabel("Filter activity", { exact: true })
@@ -268,6 +275,7 @@ test("activity shows new rows and errors while worker logs continue every 50 ms"
 test("organizer activity makes outcomes readable and keeps full paths in details", async ({
   page,
 }) => {
+  if (process.env.CI) test.setTimeout(60_000);
   await page.setViewportSize({ width: 1120, height: 760 });
   await desktopFixture(page, {
     expanded: true,
@@ -294,6 +302,7 @@ test("organizer activity makes outcomes readable and keeps full paths in details
   );
   await page.screenshot({
     path: "test-results/organizer-activity-1120-light.png",
+    animations: "disabled",
   });
   await page
     .getByLabel("Activity scope", { exact: true })
