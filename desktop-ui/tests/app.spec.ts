@@ -105,15 +105,15 @@ for (const [width, height] of [
     test(
       "controls fit " + width + "x" + height + " " + (dark ? "dark" : "light"),
       async ({ page }) => {
-        // Activity paging is covered separately; keep these screenshots focused
-        // on the work area layout instead of rendering the full history each time.
+        // Activity paging is covered separately; keep this fixture small so the
+        // layout checks measure the work areas instead of a long activity list.
         test.setTimeout(60_000);
         await page.setViewportSize({ width, height });
         await desktopFixture(page, {
           dark,
           expanded: true,
           outcome: "running",
-          activityEntries: 24,
+          activityEntries: 4,
         });
         await page.goto("/");
         await expect(
