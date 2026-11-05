@@ -37,7 +37,7 @@
               "identifier": "opener:allow-open-url",
               "allow": [
                 {
-                  "url": "https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/releases/latest/download/TrainsDownloader-windows.exe"
+                  "url": "https://github.com/gmoran1016/Trains.com-Magazine-Downloader/releases/latest/download/TrainsDownloader-windows.exe"
                 }
               ]
             }
@@ -74,7 +74,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFRkNFRUYxQjg5NjJDNEMKUldSTUxKYTQ4ZTc4bnJmV0VTR1pSZEJaTzBEK0wyMjU2eHR6eXM1dGJ2OGJqQk9IaFdTOU1ncHAK",
       "endpoints": [
-        "https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer/releases/latest/download/latest.json"
+        "https://github.com/gmoran1016/Trains.com-Magazine-Downloader/releases/latest/download/latest.json"
       ]
     }
   }

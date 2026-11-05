@@ -9,7 +9,7 @@ from scripts.build_update_manifest import build_manifest
 from scripts.collect_desktop_packages import collect_packages
 
 
-REPOSITORY = "gmoran1016/Trains.com-PDF-Downloader-Renamer"
+REPOSITORY = "gmoran1016/Trains.com-Magazine-Downloader"
 
 
 def write_file(path: Path, content: str) -> Path:

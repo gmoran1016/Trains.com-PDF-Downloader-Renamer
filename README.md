@@ -3,7 +3,7 @@
   <h1>Trains.com Magazine &amp; Track Plan Downloader</h1>
   <p><strong>Download Trains.com magazines and track plans, then organize your PDFs in one desktop app.</strong></p>
   <p>
-    <a href="../../releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/gmoran1016/Trains.com-PDF-Downloader-Renamer?display_name=tag&style=for-the-badge&label=Latest%20release"></a>
+    <a href="../../releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/gmoran1016/Trains.com-Magazine-Downloader?display_name=tag&style=for-the-badge&label=Latest%20release"></a>
   </p>
   <p><a href="#download">Download for your platform</a> · <a href="#whats-new-in-v200">What’s new in v2.0.0</a> · <a href="#running-from-source">Build from source</a></p>
 </div>
@@ -135,8 +135,8 @@ The **Organize** tab can also rename and sort any existing folder of PDFs indepe
 Building requires Rust stable, Node.js 22.12+ (CI uses 24), Python 3.11+, and the [Tauri desktop prerequisites](https://v2.tauri.app/start/prerequisites/). Windows needs Visual Studio C++ build tools and WebView2. Google Chrome is required for download jobs.
 
 ```bash
-git clone https://github.com/gmoran1016/Trains.com-PDF-Downloader-Renamer.git
-cd Trains.com-PDF-Downloader-Renamer
+git clone https://github.com/gmoran1016/Trains.com-Magazine-Downloader.git
+cd Trains.com-Magazine-Downloader
 python -m venv .venv
 
 # Windows
