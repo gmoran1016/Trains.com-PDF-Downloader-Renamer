@@ -53,8 +53,10 @@ try {
     Push-Location desktop-ui
     try { Run-Step $npm @('run','tauri','--','build','--bundles','nsis') } finally { Pop-Location }
     Copy-Item -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/trains-desktop.exe') -Destination (Join-Path $distRoot 'TrainsDownloader-windows.exe')
-    $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter '*.exe' -File)
-    if ($installers.Count -ne 1) { throw 'Expected one Windows installer.' }
+    $appVersion = (Get-Content -LiteralPath (Join-Path $projectRoot 'desktop-ui/package.json') -Raw | ConvertFrom-Json).version
+    $installerPattern = '*_' + $appVersion + '_x64-setup.exe'
+    $installers = @(Get-ChildItem -LiteralPath (Join-Path $env:CARGO_TARGET_DIR 'release/bundle/nsis') -Filter $installerPattern -File)
+    if ($installers.Count -ne 1) { throw "Expected one Windows installer for version $appVersion." }
     Copy-Item -LiteralPath $installers[0].FullName -Destination (Join-Path $distRoot 'TrainsDownloader-windows-setup.exe')
     & (Join-Path $projectRoot 'scripts/verify-desktop-release.ps1') -ExecutablePath (Join-Path $distRoot 'TrainsDownloader-windows.exe')
     Write-Host ('Build complete: ' + (Join-Path $projectRoot ('dist/desktop-' + $runId)))
