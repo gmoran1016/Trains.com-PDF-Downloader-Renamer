@@ -1,6 +1,8 @@
 # Trains.com Magazine & Track Plan Downloader
 
-**v1.10.0** — A Tauri desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer. The interface uses React and TypeScript; Rust retains desktop integration and the existing Python engine is bundled.
+**v1.10.1** — Fixes issue-based PDF naming and metadata during downloads, and skips existing issues across older destination layouts.
+
+A Tauri desktop application for downloading trains.com magazine issues and Model Railroader track plan PDFs, with a built-in PDF organizer. The interface uses React and TypeScript; Rust retains desktop integration and the existing Python engine is bundled.
 
 ## Download
 

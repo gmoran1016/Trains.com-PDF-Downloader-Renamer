@@ -182,10 +182,16 @@ def test_direct_issue_download_falls_back_to_authenticated_http_when_browser_is_
     downloader._session_cookies = [
         {"name": "kserv-session", "value": "session-token"}
     ]
-    downloader._fetch_pdf = lambda url, dest_dir, hint_prefix, cookies, flat: (
-        True,
-        f"{url}|{dest_dir}|{hint_prefix}|{cookies['kserv-session']}|{flat}",
-    )
+    captured = {}
+
+    def fake_fetch_pdf(url, dest_dir, hint_prefix, cookies, flat, issue_url=None):
+        captured["issue_url"] = issue_url
+        return (
+            True,
+            f"{url}|{dest_dir}|{hint_prefix}|{cookies['kserv-session']}|{flat}",
+        )
+
+    downloader._fetch_pdf = fake_fetch_pdf
 
     class Response:
         status_code = 200
@@ -207,6 +213,7 @@ def test_direct_issue_download_falls_back_to_authenticated_http_when_browser_is_
         "https://cdn.example/MAG-MRR-OCT26.pdf|"
         f"{tmp_path / 'organized'}|MRR|session-token|False",
     )
+    assert captured["issue_url"] == issue_url
 
 
 def test_issue_mode_uses_authenticated_http_when_browser_is_blocked(monkeypatch):
@@ -490,3 +497,106 @@ def test_download_issue_uses_current_pdf_edition_viewer(monkeypatch, tmp_path):
     )
 
     assert result == (True, "viewer.pdf")
+
+
+def test_download_issue_passes_issue_page_to_direct_pdf_processing(monkeypatch, tmp_path):
+    issue_url = "https://www.trains.com/mrr/magazine/january-2024/"
+    driver = ModeDriver(direct_href="https://cdn.example/files/opaque-id.pdf")
+    driver.get_cookies = lambda: []
+    downloader = _downloader(driver)
+    downloader.download_dir = str(tmp_path / "raw")
+    downloader._navigate = lambda _url: None
+    downloader._run_browser_command = lambda operation, **_kwargs: operation()
+    captured = {}
+
+    def fake_fetch_pdf(_url, _dest_dir, _prefix, _cookies, flat=False, issue_url=None):
+        captured["issue_url"] = issue_url
+        return True, "processed.pdf"
+
+    downloader._fetch_pdf = fake_fetch_pdf
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    result = downloader.download_issue(
+        issue_url,
+        str(tmp_path / "organized"),
+        hint_prefix="MRR",
+    )
+
+    assert result == (True, "processed.pdf")
+    assert captured["issue_url"] == issue_url
+
+
+def test_download_worker_passes_issue_page_to_parallel_pdf_processing(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    issue_url = "https://www.trains.com/mrr/magazine/january-2024/"
+    cookie_path = tmp_path / "cookies.json"
+    cookie_path.write_text("[]", encoding="utf-8")
+    captured = {}
+
+    class FakeDownloader:
+        def __init__(self, download_dir, headless, log_fn=None):
+            self.download_dir = download_dir
+            self._driver = SimpleNamespace(get_cookies=lambda: [])
+
+        def add_cookies(self, _cookies):
+            pass
+
+        def is_logged_in(self):
+            return True
+
+        def collect_all_issue_links(self, *_args, **_kwargs):
+            return [issue_url]
+
+        def detect_issue_mode(self, *_args, **_kwargs):
+            return "mode1", "https://cdn.example/files/opaque-id.pdf"
+
+        def _run_browser_command(self, operation, **_kwargs):
+            return operation()
+
+        def save_cookies(self, _path):
+            pass
+
+        def close(self):
+            pass
+
+    def fake_fetch_pdf(*_args, issue_url=None, **_kwargs):
+        captured["issue_url"] = issue_url
+        return True, "processed.pdf"
+
+    monkeypatch.setattr(
+        trains_app,
+        "MAGAZINES",
+        {"Model Railroader": {
+            "url": "https://www.trains.com/mrr/magazine/",
+            "prefix": "MRR",
+        }},
+    )
+    monkeypatch.setattr(trains_app, "MagazineDownloader", FakeDownloader)
+    monkeypatch.setattr(
+        trains_app, "load_cookies", lambda _path: [{"name": "session", "value": "x"}]
+    )
+    monkeypatch.setattr(
+        trains_app,
+        "load_progress",
+        lambda: {"completed": [], "completed_scoped": [], "failed": []},
+    )
+    monkeypatch.setattr(trains_app, "save_progress", lambda _progress: None)
+    monkeypatch.setattr(trains_app, "fetch_pdf", fake_fetch_pdf)
+    monkeypatch.setattr(trains_app.time, "sleep", lambda *_args: None)
+
+    worker = trains_app.DownloadWorker(
+        ["Model Railroader"],
+        str(tmp_path / "magazines"),
+        True,
+        False,
+        str(cookie_path),
+        True,
+        include_specials=False,
+    )
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_SUCCESS
+    assert captured["issue_url"] == issue_url
