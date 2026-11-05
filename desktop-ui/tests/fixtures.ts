@@ -5,6 +5,7 @@ export async function desktopFixture(
     dark?: boolean;
     outcome?: string;
     expanded?: boolean;
+    activityEntries?: number;
     summary?: boolean;
     incomplete?: boolean;
     failSetting?: string;
@@ -85,8 +86,9 @@ export async function desktopFixture(
       notice: null,
       tray_available: true,
     };
-    let logs = Array.from({ length: 260 }, (_, index) => ({
-      id: 260 - index,
+    const activityEntries = options.activityEntries ?? 260;
+    let logs = Array.from({ length: activityEntries }, (_, index) => ({
+      id: activityEntries - index,
       timestamp_ms: Date.now() - index * 1000,
       level: index % 20 === 0 ? "error" : "info",
       message:
@@ -95,7 +97,7 @@ export async function desktopFixture(
           : "Downloaded issue " + index,
     }));
     current.log_count = logs.length;
-    current.error_count = 13;
+    current.error_count = Math.ceil(activityEntries / 20);
     if (options.organizerActivity) {
       current.settings.selected_page = "organize";
       current.job.message = "Organizing PDF 14 of 42: MRR-03-March-2024.pdf";
