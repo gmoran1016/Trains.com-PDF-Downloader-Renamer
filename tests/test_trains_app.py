@@ -543,21 +543,93 @@ def test_handle_result_marks_completed_on_success(tmp_path):
         trains_app.PROGRESS_FILE = original
 
 
-def test_handle_result_marks_completed_for_readonly(tmp_path):
+def test_handle_result_does_not_complete_readonly_and_clears_stale_entry(tmp_path):
     from trains_app import _handle_result
     import trains_app
     original = trains_app.PROGRESS_FILE
     trains_app.PROGRESS_FILE = str(tmp_path / "progress.json")
     try:
-        progress = _make_progress()
-        completed_set = set()
+        url = "http://x.com/old/"
+        scoped_key = trains_app.progress_key(url, str(tmp_path), False)
+        progress = {
+            "completed": [url],
+            "completed_scoped": [scoped_key],
+            "failed": [],
+        }
+        completed_set = {url}
         logs = []
-        _handle_result(False, "No PDF download available (read-only issue)",
-                       "http://x.com/old/", progress, completed_set, logs.append)
-        assert "http://x.com/old/" in completed_set
-        assert "http://x.com/old/" in progress["completed"]
+        _handle_result(
+            False,
+            "No PDF download available (read-only issue)",
+            url,
+            progress,
+            completed_set,
+            logs.append,
+            progress_key_value=scoped_key,
+        )
+        assert url not in completed_set
+        assert url not in progress["completed"]
+        assert scoped_key not in progress["completed_scoped"]
+        assert any("[no pdf]" in line for line in logs)
     finally:
         trains_app.PROGRESS_FILE = original
+
+
+def test_stale_completion_is_cleared_when_issue_pdf_is_missing(tmp_path):
+    from trains_app import _clear_stale_progress_completion, progress_key
+
+    url = "https://www.trains.com/trn/magazine/december-2026/"
+    destination = tmp_path / "TRN"
+    scoped_key = progress_key(url, str(destination), False)
+    progress = {
+        "completed": [url],
+        "completed_scoped": [scoped_key],
+        "failed": [],
+    }
+    completed_set = {url}
+
+    assert _clear_stale_progress_completion(
+        progress,
+        url,
+        str(destination),
+        "TRN",
+        False,
+        completed_set=completed_set,
+    ) is True
+
+    assert scoped_key not in progress["completed_scoped"]
+    assert url not in progress["completed"]
+    assert url not in completed_set
+
+
+def test_stale_completion_is_retained_when_issue_pdf_exists(tmp_path):
+    from trains_app import _clear_stale_progress_completion, progress_key
+
+    url = "https://www.trains.com/trn/magazine/december-2026/"
+    destination = tmp_path / "TRN"
+    issue_folder = destination / "2026"
+    issue_folder.mkdir(parents=True)
+    (issue_folder / "TRN-12-December-2026.pdf").write_bytes(b"existing")
+    scoped_key = progress_key(url, str(destination), False)
+    progress = {
+        "completed": [url],
+        "completed_scoped": [scoped_key],
+        "failed": [],
+    }
+    completed_set = {url}
+
+    assert _clear_stale_progress_completion(
+        progress,
+        url,
+        str(destination),
+        "TRN",
+        False,
+        completed_set=completed_set,
+    ) is False
+
+    assert scoped_key in progress["completed_scoped"]
+    assert url in progress["completed"]
+    assert url in completed_set
 
 
 def test_handle_result_appends_failed_on_error(tmp_path):

@@ -5,14 +5,14 @@
   <p>
     <a href="../../releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/gmoran1016/Trains.com-PDF-Downloader-Renamer?display_name=tag&style=for-the-badge&label=Latest%20release"></a>
   </p>
-  <p><a href="#download">Download for your platform</a> · <a href="#whats-new-in-v202">What’s new in v2.0.2</a> · <a href="#running-from-source">Build from source</a></p>
+  <p><a href="#download">Download for your platform</a> · <a href="#whats-new-in-v203">What’s new in v2.0.3</a> · <a href="#running-from-source">Build from source</a></p>
 </div>
 
 > **Upgrading from v1.x?** Install v2.0.0 once from the [latest GitHub release](../../releases/latest). Earlier versions do not include the updater; later signed releases can be installed from the app after you approve them.
 
 ## Contents
 
-[Download](#download) · [What’s new](#whats-new-in-v202) · [Updating](#updating) · [Supported magazines](#supported-magazines) · [Features](#features) · [Authentication](#authentication) · [PDF naming](#pdf-naming--organization) · [Build and test](#running-from-source)
+[Download](#download) · [What’s new](#whats-new-in-v203) · [Updating](#updating) · [Supported magazines](#supported-magazines) · [Features](#features) · [Authentication](#authentication) · [PDF naming](#pdf-naming--organization) · [Build and test](#running-from-source)
 
 ## Download
 
@@ -30,13 +30,13 @@ All files are also listed on the [Releases page](../../releases/latest). Downloa
 
 > **macOS:** On first launch, right-click the app and choose **Open** to bypass Gatekeeper.
 
-## What’s new in v2.0.2
+## What’s new in v2.0.3
 
-- **Lighter archive scans:** use authenticated HTML requests and keep Chrome available to recover failed or empty responses.
-- **Better recovery from temporary blocks:** longer retry waits respect the site's timing, and Stop works throughout those waits.
-- **Reliable cancellation and saved login:** missing-issue jobs report cancellation correctly, and requests use refreshed browser cookies when available.
+- **Reliable resume:** the app checks the selected folder before skipping an issue and retries when its PDF is missing.
+- **Retryable unavailable issues:** read-only pages are no longer saved as completed, so issues can be retried after their PDFs become available.
+- **Consistent missing-issue checks:** regular issues and cached special issues are rechecked against files on disk.
 
-See the [full v2.0.2 release notes](docs/releases/v2.0.2.md).
+See the [full v2.0.3 release notes](docs/releases/v2.0.3.md).
 
 ## Updating
 

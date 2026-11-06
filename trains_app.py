@@ -418,6 +418,73 @@ def _record_progress_completion(progress: dict, issue_url: str,
         progress["completed_scoped"].append(scoped_key)
 
 
+def _clear_progress_completion(progress: dict, issue_url: str,
+                                scoped_key: str | None = None,
+                                completed_set: set | None = None) -> bool:
+    """Forget a completion record, retaining other destination scopes."""
+    progress.setdefault("completed", [])
+    progress.setdefault("completed_scoped", [])
+    canonical_url = _canonical_url(issue_url)
+    before = len(progress["completed_scoped"])
+
+    def key_matches_url(value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        try:
+            return _canonical_url(json.loads(value).get("url", "")) == canonical_url
+        except (TypeError, ValueError, AttributeError):
+            return False
+
+    if scoped_key:
+        progress["completed_scoped"] = [
+            key for key in progress["completed_scoped"] if key != scoped_key
+        ]
+    else:
+        progress["completed_scoped"] = [
+            key for key in progress["completed_scoped"]
+            if not key_matches_url(key)
+        ]
+
+    changed = len(progress["completed_scoped"]) != before
+    if not any(key_matches_url(key) for key in progress["completed_scoped"]):
+        previous_count = len(progress["completed"])
+        progress["completed"] = [
+            value for value in progress["completed"]
+            if not isinstance(value, str)
+            or _canonical_url(value) != canonical_url
+        ]
+        changed = changed or len(progress["completed"]) != previous_count
+        if completed_set is not None:
+            completed_set.difference_update(
+                value for value in tuple(completed_set)
+                if isinstance(value, str) and _canonical_url(value) == canonical_url
+            )
+    return changed
+
+
+def _clear_stale_progress_completion(
+    progress: dict,
+    issue_url: str,
+    destination_dir: str,
+    prefix: str,
+    flat: bool,
+    existing_index: set[tuple[str, str]] | None = None,
+    completed_set: set | None = None,
+) -> bool:
+    """Clear saved completion state only when the corresponding PDF is absent."""
+    if not _is_progress_completed(progress, issue_url, destination_dir, flat):
+        return False
+    if issue_already_on_disk(
+        issue_url, destination_dir, prefix, flat,
+        existing_index=existing_index,
+    ):
+        return False
+    key = progress_key(issue_url, destination_dir, flat)
+    return _clear_progress_completion(
+        progress, issue_url, key, completed_set=completed_set
+    )
+
+
 def save_progress(progress: dict) -> None:
     try:
         with open(PROGRESS_FILE, "w", encoding="utf-8") as f:
@@ -661,8 +728,10 @@ def _handle_result(ok: bool, result: str, issue_url: str,
         save_progress(progress)
     elif "read-only" in result or "No PDF download available" in result:
         log_fn(f"  [no pdf] {result}")
-        completed_set.add(issue_url)
-        _record_progress_completion(progress, issue_url, progress_key_value)
+        _clear_progress_completion(
+            progress, issue_url, progress_key_value,
+            completed_set=completed_set,
+        )
         save_progress(progress)
     else:
         log_fn(f"  FAILED: {result}")
@@ -758,7 +827,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "2.0.2"
+APP_VERSION = "2.0.3"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -2578,12 +2647,6 @@ class DownloadWorker(QThread):
                             break
 
                         scoped_key_value = progress_key(issue_url, dest_dir, flat)
-                        if _is_progress_completed(progress, issue_url, dest_dir, flat):
-                            self._log(f"[skip] {issue_url}")
-                            done += 1
-                            self._emit_progress(done, total, mag_name, mag_done, mag_total)
-                            continue
-
                         existing_index = existing_issue_indexes[
                             _download_index_key(dest_dir, prefix)
                         ]
@@ -2598,6 +2661,20 @@ class DownloadWorker(QThread):
                             done += 1
                             self._emit_progress(done, total, mag_name, mag_done, mag_total)
                             continue
+
+                        if _clear_stale_progress_completion(
+                            progress,
+                            issue_url,
+                            dest_dir,
+                            prefix,
+                            flat,
+                            existing_index=existing_index,
+                            completed_set=completed_set,
+                        ):
+                            self._log(
+                                f"[retry] Previously completed issue has no PDF in the destination: {issue_url}"
+                            )
+                            save_progress(progress)
 
                         self._log(f"[{done + 1}/{total}] {issue_url}")
                         try:
@@ -3270,8 +3347,6 @@ class MissingIssuesWorker(QThread):
                 else:
                     # Special issue — skip if already downloaded in a prior run
                     special_key_value = progress_key(url, special_dir, True)
-                    if special_key_value in downloaded_specials:
-                        continue
                     if issue_already_on_disk(
                         url,
                         special_dir,
@@ -3286,6 +3361,15 @@ class MissingIssuesWorker(QThread):
                         save_special_issues(downloaded_specials)
                         save_progress(progress)
                         continue
+                    if special_key_value in downloaded_specials:
+                        # The cache is only a hint; retry if its PDF disappeared.
+                        downloaded_specials.discard(special_key_value)
+                        _clear_progress_completion(
+                            progress, url, special_key_value,
+                            completed_set=completed_set,
+                        )
+                        save_special_issues(downloaded_specials)
+                        save_progress(progress)
                     special.append(url)
 
             if not matched and not special:
@@ -3318,12 +3402,6 @@ class MissingIssuesWorker(QThread):
                     break
 
                 scoped_key_value = progress_key(url, self.dest_dir, False)
-                if _is_progress_completed(progress, url, self.dest_dir, False):
-                    self._log(f"[skip] {url}")
-                    dl_count += 1
-                    self.signals.progress.emit(dl_count, total)
-                    continue
-
                 if issue_already_on_disk(
                     url,
                     self.dest_dir,
@@ -3340,6 +3418,22 @@ class MissingIssuesWorker(QThread):
                     dl_count += 1
                     self.signals.progress.emit(dl_count, total)
                     continue
+
+                if _clear_stale_progress_completion(
+                    progress,
+                    url,
+                    self.dest_dir,
+                    self.prefix,
+                    False,
+                    existing_index=existing_issue_indexes[
+                        _download_index_key(self.dest_dir, self.prefix)
+                    ],
+                    completed_set=completed_set,
+                ):
+                    self._log(
+                        f"[retry] Previously completed issue has no PDF in the destination: {url}"
+                    )
+                    save_progress(progress)
 
                 self._log(f"[{i}/{total}] {month} {year}  —  {url}")
                 os.makedirs(os.path.join(self.dest_dir, year), exist_ok=True)
@@ -3382,7 +3476,7 @@ class MissingIssuesWorker(QThread):
                     save_special_issues(downloaded_specials)
                     self._log(f"  Downloaded: {result}")
                 elif "read-only" in result or "No PDF download available" in result:
-                    downloaded_specials.add(scoped_key_value)
+                    downloaded_specials.discard(scoped_key_value)
                     save_special_issues(downloaded_specials)
 
                 dl_count += 1
