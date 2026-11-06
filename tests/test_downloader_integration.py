@@ -12,6 +12,17 @@ from trains_app import MagazineDownloader
 ArchiveScanError = getattr(trains_app, "ArchiveScanError", RuntimeError)
 
 
+@pytest.fixture(autouse=True)
+def isolate_archive_http(monkeypatch):
+    """Browser fixtures must never make live archive requests."""
+    import requests
+
+    def unavailable(*_args, **_kwargs):
+        raise requests.ConnectionError("Synthetic HTTP transport failure")
+
+    monkeypatch.setattr(requests, "get", unavailable)
+
+
 class FakeElement:
     def __init__(self, href="", text=""):
         self.href = href
@@ -128,7 +139,7 @@ def test_page_links_are_extracted_in_one_browser_script_call():
     assert driver.href_script_calls == 1
 
 
-def test_archive_page_falls_back_to_authenticated_http_for_cloudfront_403(
+def test_archive_http_discovery_handles_a_cloudfront_blocked_browser(
     monkeypatch,
 ):
     archive = "https://www.trains.com/mrr/magazine/"
@@ -172,6 +183,310 @@ def test_archive_page_falls_back_to_authenticated_http_for_cloudfront_403(
         "url": archive,
         "cookies": {"kserv-session": "session-token"},
     }
+
+
+def test_archive_http_success_avoids_browser_navigation(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/trn/magazine/"
+    driver = FakeDriver(current_url="https://www.trains.com/")
+    downloader = _downloader(driver)
+    response = requests.Response()
+    response.status_code = 200
+    response.url = f"{archive}page/7/"
+    response._content = (
+        '<a href="/trn/magazine/october-2020/">October</a>'
+        '<a href="/trn/magazine/october-2020/?ref=cover">Cover</a>'
+        '<a href="/trn/magazine/page/8/">Next</a>'
+        '<a href="/mrr/magazine/october-2020/">Another magazine</a>'
+    ).encode()
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: response)
+
+    assert downloader.get_page_issue_links(
+        response.url, archive, hint_prefix="TRN"
+    ) == [f"{archive}october-2020/"]
+    assert driver.requested_url is None
+    assert driver.execute_script_calls == 0
+
+
+@pytest.mark.parametrize(
+    "status,retry_after,expected_wait",
+    [(403, None, 60), (403, "invalid", 60), (403, "95", 95),
+     (429, "95", 95), (503, "95", 95),
+     (429, "Thu, 01 Jan 1970 00:02:00 GMT", 120)],
+)
+def test_archive_block_waits_before_retrying(
+    monkeypatch, status, retry_after, expected_wait
+):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.page_source = "<title>403 Forbidden</title>"
+    driver.title = "403 Forbidden"
+    downloader = _downloader(driver)
+    clock = [0.0]
+    requests_at = []
+    http_calls = []
+    monkeypatch.setattr(trains_app.time, "time", lambda: clock[0])
+    monkeypatch.setattr(trains_app.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(trains_app.random, "uniform", lambda *_args: 0)
+
+    def navigate(url):
+        requests_at.append(("browser", clock[0]))
+        driver.requested_url = url
+
+    def get(url, **_kwargs):
+        requests_at.append(("http", clock[0]))
+        http_calls.append(url)
+        response = requests.Response()
+        response.url = url
+        if len(http_calls) == 1:
+            response.status_code = status
+            if retry_after:
+                response.headers["Retry-After"] = retry_after
+        else:
+            response.status_code = 200
+            response._content = b'<a href="/mrr/magazine/november-2026/">November</a>'
+        return response
+
+    monkeypatch.setattr(requests, "get", get)
+    driver.get = navigate
+
+    assert downloader.get_page_issue_links(archive, archive, "MRR") == [
+        f"{archive}november-2026/"
+    ]
+    if status == 403:
+        assert requests_at == [
+            ("http", 0.0), ("browser", expected_wait),
+            ("http", expected_wait + 120),
+        ]
+    else:
+        assert requests_at == [("http", 0.0), ("http", expected_wait)]
+        assert driver.requested_url is None
+
+
+def test_persistent_archive_block_has_bounded_retries(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.page_source = "<title>403 Forbidden</title>"
+    downloader = _downloader(driver)
+    clock = [0.0]
+    requests_at = []
+    monkeypatch.setattr(trains_app.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(trains_app.random, "uniform", lambda *_args: 0)
+
+    def navigate(url):
+        requests_at.append(("browser", clock[0]))
+        driver.requested_url = url
+
+    def get(url, **_kwargs):
+        requests_at.append(("http", clock[0]))
+        response = requests.Response()
+        response.url = url
+        response.status_code = 403
+        return response
+
+    monkeypatch.setattr(requests, "get", get)
+    driver.get = navigate
+
+    with pytest.raises(ArchiveScanError, match="403") as caught:
+        downloader.collect_all_issue_links(archive, hint_prefix="MRR")
+
+    assert requests_at == [("http", 0.0), ("browser", 60.0), ("http", 180.0)]
+    assert caught.value.partial_links == []
+
+
+def test_empty_http_archive_is_confirmed_in_browser(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive, hrefs=[f"{archive}november-2026/"])
+    downloader = _downloader(driver)
+    response = requests.Response()
+    response.url = archive
+    response.status_code = 200
+    response._content = b'<html><p>Loading archive...</p></html>'
+    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: response)
+
+    assert downloader.get_page_issue_links(archive, archive, "MRR") == [
+        f"{archive}november-2026/"
+    ]
+    assert driver.requested_url == archive
+
+
+def test_later_http_200_block_cannot_complete_archive(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.page_source = "<title>403 Forbidden</title>"
+    downloader = _downloader(driver)
+    monkeypatch.setattr(trains_app.time, "sleep", lambda _seconds: None)
+
+    def get(url, **_kwargs):
+        response = requests.Response()
+        response.url = url
+        response.status_code = 200
+        response._content = (
+            b'<title>403 Forbidden</title>' if url.endswith('page/2/')
+            else b'<a href="/mrr/magazine/november-2026/">November</a>'
+        )
+        return response
+
+    monkeypatch.setattr(requests, "get", get)
+
+    with pytest.raises(ArchiveScanError) as caught:
+        downloader.collect_all_issue_links(archive, hint_prefix="MRR")
+
+    assert caught.value.partial_links == [f"{archive}november-2026/"]
+
+
+def test_http_timeout_with_browser_block_does_not_restart_chrome(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.page_source = "<title>403 Forbidden</title>"
+    downloader = _downloader(driver)
+    clock = [0.0]
+    requests_at = []
+    restarts = []
+    monkeypatch.setattr(trains_app.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(trains_app.random, "uniform", lambda *_args: 0)
+    downloader._restart_browser = lambda: restarts.append(True) or False
+
+    def get(*_args, **_kwargs):
+        requests_at.append(clock[0])
+        raise requests.ReadTimeout("Read timed out. (read timeout=60)")
+
+    monkeypatch.setattr(requests, "get", get)
+
+    with pytest.raises(ArchiveScanError):
+        downloader.collect_all_issue_links(archive, hint_prefix="MRR")
+
+    assert restarts == []
+    assert requests_at == [0.0, 60.0, 180.0]
+
+
+def test_archive_stop_during_cooldown_preserves_previous_pages(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.page_source = "<title>403 Forbidden</title>"
+    downloader = _downloader(driver)
+    clock = [0.0]
+    stopped = [False]
+    downloader._stop_requested = lambda: stopped[0]
+    requested_pages = []
+    monkeypatch.setattr(trains_app.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(trains_app.random, "uniform", lambda *_args: 0)
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if requested_pages and requested_pages[-1].endswith("page/2/"):
+            stopped[0] = True
+
+    def get(url, **_kwargs):
+        requested_pages.append(url)
+        response = requests.Response()
+        response.url = url
+        response.status_code = 403 if url.endswith("page/2/") else 200
+        response._content = b'<a href="/mrr/magazine/november-2026/">November</a>'
+        return response
+
+    monkeypatch.setattr(trains_app.time, "sleep", sleep)
+    monkeypatch.setattr(requests, "get", get)
+
+    assert downloader.collect_all_issue_links(archive, hint_prefix="MRR") == [
+        f"{archive}november-2026/"
+    ]
+    assert requested_pages == [archive, f"{archive}page/2/"]
+    assert clock[0] < 10
+
+
+def test_authenticated_html_uses_current_browser_cookies(monkeypatch):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.get_cookies = lambda: [{"name": "session", "value": "refreshed"}]
+    downloader = _downloader(driver)
+    downloader._session_cookies = [{"name": "session", "value": "old"}]
+    sent_cookies = []
+
+    def get(url, **kwargs):
+        sent_cookies.append(kwargs["cookies"])
+        response = requests.Response()
+        response.url = url
+        response.status_code = 200
+        response._content = b'<a href="/mrr/magazine/november-2026/">November</a>'
+        return response
+
+    monkeypatch.setattr(requests, "get", get)
+
+    assert downloader.get_page_issue_links(archive, archive, "MRR") == [
+        f"{archive}november-2026/"
+    ]
+    assert sent_cookies == [{"session": "refreshed"}]
+
+
+@pytest.mark.parametrize(
+    "job_kind", ["magazines", "download-missing", "download-missing-no-match"]
+)
+def test_worker_stop_during_archive_cooldown_cancels_without_more_requests(
+    monkeypatch, tmp_path, job_kind
+):
+    import requests
+
+    archive = "https://www.trains.com/mrr/magazine/"
+    driver = FakeDriver(current_url=archive)
+    driver.page_source = "<title>403 Forbidden</title>"
+    driver.quit = lambda: None
+    clock = [0.0]
+    requested_pages = []
+    monkeypatch.setattr(MagazineDownloader, "_create_driver", lambda _self: driver)
+    monkeypatch.setattr(MagazineDownloader, "wait_for_manual_login", lambda _self, **_kwargs: True)
+    monkeypatch.setattr(trains_app.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(trains_app.random, "uniform", lambda *_args: 0)
+    monkeypatch.setattr(trains_app, "PROGRESS_FILE", str(tmp_path / "progress.json"))
+    monkeypatch.setattr(trains_app, "SPECIAL_ISSUES_FILE", str(tmp_path / "specials.json"))
+    if job_kind == "magazines":
+        worker = trains_app.DownloadWorker(
+            ["Model Railroader", "Trains Magazine"], str(tmp_path), False,
+            False, None, True, include_specials=True,
+        )
+    else:
+        worker = trains_app.MissingIssuesWorker(
+            "MRR", archive,
+            {"2026": ["October" if job_kind.endswith("no-match") else "November"]},
+            str(tmp_path), None, False,
+        )
+
+    def sleep(seconds):
+        clock[0] += seconds
+        if requested_pages and requested_pages[-1].endswith("page/2/"):
+            worker.stop()
+
+    def get(url, **_kwargs):
+        requested_pages.append(url)
+        response = requests.Response()
+        response.url = url
+        response.status_code = 403 if url.endswith("page/2/") else 200
+        response._content = b'<a href="/mrr/magazine/november-2026/">November</a>'
+        return response
+
+    monkeypatch.setattr(trains_app.time, "sleep", sleep)
+    monkeypatch.setattr(requests, "get", get)
+
+    worker.run()
+
+    assert worker.outcome == trains_app.OUTCOME_CANCELLED
+    assert requested_pages == [archive, f"{archive}page/2/"]
+    assert clock[0] < 10
 
 
 def test_direct_issue_download_falls_back_to_authenticated_http_when_browser_is_blocked(
@@ -542,7 +857,7 @@ def test_download_worker_passes_issue_page_to_parallel_pdf_processing(
     captured = {}
 
     class FakeDownloader:
-        def __init__(self, download_dir, headless, log_fn=None):
+        def __init__(self, download_dir, headless, log_fn=None, stop_requested=None):
             self.download_dir = download_dir
             self._driver = SimpleNamespace(get_cookies=lambda: [])
 

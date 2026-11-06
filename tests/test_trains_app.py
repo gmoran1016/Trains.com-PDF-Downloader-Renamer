@@ -817,7 +817,7 @@ def test_download_worker_classifies_empty_archive_as_no_results(monkeypatch, tmp
     import trains_app
 
     class EmptyDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self._driver = None
 
         def wait_for_manual_login(self, **_kwargs):
@@ -844,7 +844,7 @@ def test_download_worker_marks_empty_failed_scan_as_failure(monkeypatch, tmp_pat
     import trains_app
 
     class BlockedDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self._driver = None
 
         def wait_for_manual_login(self, **_kwargs):
@@ -887,7 +887,7 @@ def test_download_worker_downloads_partial_results_and_continues_after_scan_fail
             return []
 
     class PartialFailureDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self.download_dir = download_dir
             self._driver = Driver()
 
@@ -945,7 +945,7 @@ def test_missing_issues_worker_downloads_partial_matches_after_scan_failure(
     downloaded = []
 
     class PartialFailureDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self.download_dir = download_dir
 
         def wait_for_manual_login(self, **_kwargs):
@@ -992,7 +992,7 @@ def test_missing_issues_worker_does_not_report_no_results_for_incomplete_scan(
     partial_issue = "https://www.trains.com/mrr/magazine/november-2026/"
 
     class PartialFailureDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self.download_dir = download_dir
 
         def wait_for_manual_login(self, **_kwargs):
@@ -1030,7 +1030,7 @@ def test_download_worker_stop_is_cancelled_not_success(monkeypatch, tmp_path):
     import trains_app
 
     class EmptyDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self._driver = None
 
         def wait_for_manual_login(self, **_kwargs):
@@ -1063,7 +1063,7 @@ def test_manual_login_wait_honors_stop_for_magazines_and_missing_jobs(
     observed_stop = []
 
     class UnauthenticatedDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self._driver = None
 
         def wait_for_manual_login(self, **kwargs):
@@ -1109,7 +1109,7 @@ def test_download_worker_passes_direct_pdf_url_from_issue_mode(monkeypatch, tmp_
             return [{"name": "auth", "value": "token"}]
 
     class DirectDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self.download_dir = download_dir
             self._driver = Driver()
 
@@ -1179,7 +1179,7 @@ def test_download_worker_skips_issue_in_legacy_folder_without_progress(
             return []
 
     class ExistingIssueDownloader:
-        def __init__(self, download_dir, headless, log_fn):
+        def __init__(self, download_dir, headless, log_fn, stop_requested=None):
             self._driver = Driver()
 
         def wait_for_manual_login(self, **_kwargs):

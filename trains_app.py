@@ -18,7 +18,7 @@ import datetime
 import threading
 from calendar import month_name, month_abbr as _month_abbr
 from pathlib import Path
-from functools import wraps
+from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
@@ -116,6 +116,8 @@ TRACK_PLAN_DATABASE_URL = (
 DOWNLOAD_TIMEOUT = 120   # seconds to wait for a PDF download
 LOGIN_TIMEOUT = 300      # seconds to wait for manual login (5 min)
 TRACK_PLAN_REQUEST_DELAY = 0.35
+ARCHIVE_REQUEST_DELAY = 2.0
+ARCHIVE_BLOCK_RETRY_DELAY = 60.0
 HTTP_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -140,6 +142,10 @@ class ArchiveScanError(RuntimeError):
 
 class ArchiveRedirectError(ArchiveScanError):
     """Raised when an archive request lands on an unrelated URL."""
+
+
+class ArchiveAccessError(ArchiveScanError):
+    """Raised for a browser access block, rather than a failed driver connection."""
 
 
 class TrackPlanAccessError(ArchiveScanError):
@@ -752,7 +758,7 @@ _abbr_list = [a for a in _month_abbr if a]
 MONTH_FROM_ABBR = {a.upper(): month_name[i + 1] for i, a in enumerate(_abbr_list)}
 MONTHNUM_FROM_ABBR = {a.upper(): f"{i + 1:02d}" for i, a in enumerate(_abbr_list)}
 MONTH_NUM_FROM_NAME = {month_name[i]: i for i in range(1, 13)}
-APP_VERSION = "2.0.1"
+APP_VERSION = "2.0.2"
 BROWSER_COMMAND_TIMEOUT = 45
 BROWSER_COMMAND_ATTEMPTS = 2
 ALL_MONTHS = list(month_name)[1:]
@@ -1394,28 +1400,6 @@ def organize_pdfs(
 
 
 # ------------------------------------------------------------------------------
-# Retry decorator
-# ------------------------------------------------------------------------------
-def retry(attempts=3, delay=2.0, exceptions=(Exception,)):
-    def decorator(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            for i in range(attempts):
-                try:
-                    return fn(*args, **kwargs)
-                except exceptions as e:
-                    if isinstance(e, ArchiveScanError):
-                        raise
-                    if i == attempts - 1:
-                        raise
-                    wait = delay * (2 ** i) + random.uniform(0, 0.5)
-                    logger.warning(f"{fn.__name__} attempt {i+1} failed: {e}. Retrying in {wait:.1f}s…")
-                    time.sleep(wait)
-        return wrapper
-    return decorator
-
-
-# ------------------------------------------------------------------------------
 # Selenium downloader
 # ------------------------------------------------------------------------------
 class MagazineDownloader:
@@ -1424,11 +1408,13 @@ class MagazineDownloader:
     Uses Selenium 4's built-in driver manager (no webdriver_manager needed).
     """
 
-    def __init__(self, download_dir: str, headless: bool = False, log_fn=None):
+    def __init__(self, download_dir: str, headless: bool = False, log_fn=None,
+                 stop_requested=None):
         self.download_dir = os.path.abspath(download_dir)
         os.makedirs(self.download_dir, exist_ok=True)
         self.log_fn = log_fn
         self.headless = headless
+        self._stop_requested = stop_requested
         self._session_cookies: list[dict] = []
         self._driver = None
 
@@ -1641,12 +1627,14 @@ class MagazineDownloader:
 
     def _cookie_dict(self) -> dict[str, str]:
         """Return the current session cookies in the shape requests expects."""
-        cookies = list(getattr(self, "_session_cookies", []) or [])
-        if not cookies:
-            try:
-                cookies = list(self._driver.get_cookies() or [])
-            except Exception:
-                cookies = []
+        try:
+            cookies = list(self._driver.get_cookies() or [])
+        except Exception:
+            cookies = []
+        if cookies:
+            self._session_cookies = [dict(c) for c in cookies]
+        else:
+            cookies = list(getattr(self, "_session_cookies", []) or [])
         return {
             str(cookie["name"]): str(cookie["value"])
             for cookie in cookies
@@ -1688,7 +1676,7 @@ class MagazineDownloader:
         *,
         expected_scope: str | None = None,
     ) -> tuple[str, str]:
-        """Fetch a page with saved cookies when Selenium is blocked by 403."""
+        """Fetch page HTML using the current authenticated session cookies."""
         import requests as _req
 
         response = _req.get(
@@ -1745,11 +1733,7 @@ class MagazineDownloader:
         archive_url: str,
         hint_prefix: str | None = None,
     ) -> list[str]:
-        """Collect issue links from authenticated HTML when browser HTML is blocked."""
-        self._log(
-            "Browser returned 403 for the archive page; "
-            "using authenticated HTTP fallback."
-        )
+        """Collect issue links without loading images, scripts, or embedded frames."""
         html, _ = self._fetch_authenticated_html(
             url,
             expected_scope=archive_url,
@@ -1886,18 +1870,107 @@ class MagazineDownloader:
                 return False
         return True
 
-    @retry(attempts=3, exceptions=(Exception,))
+    def _wait_for_archive_delay(self, seconds: float) -> bool:
+        """Wait politely between requests, returning False when Stop is pressed."""
+        stop_requested = getattr(self, "_stop_requested", None)
+        if stop_requested is None:
+            if seconds > 0:
+                time.sleep(seconds)
+            return True
+        deadline = time.monotonic() + seconds
+        while True:
+            if stop_requested():
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            time.sleep(min(0.25, remaining))
+
     def get_page_issue_links(self, url: str, archive_url: str,
                              hint_prefix: str | None = None) -> list[str]:
-        return self._run_browser_command(
-            lambda: self._get_page_issue_links_once(
-                url, archive_url, hint_prefix=hint_prefix
-            ),
-            description="Archive page inspection",
-        )
+        """Prefer lightweight HTML requests and back off when access is blocked."""
+        import requests
 
-    def _get_page_issue_links_once(self, url: str, archive_url: str,
-                                   hint_prefix: str | None = None) -> list[str]:
+        use_browser = False
+        for attempt in range(3):
+            if not self._wait_for_archive_delay(0):
+                raise ArchiveScanError("Archive scan stopped by user.")
+            try:
+                if not use_browser:
+                    try:
+                        links = self._get_page_issue_links_via_http(
+                            url, archive_url, hint_prefix=hint_prefix
+                        )
+                    except requests.RequestException as http_error:
+                        response = http_error.response
+                        status = getattr(response, "status_code", None)
+                        if status == 403:
+                            # Try Chrome only after the access-block cooldown,
+                            # as the next bounded attempt, not an extra request.
+                            use_browser = True
+                            raise
+                        if status in (404, 429) or getattr(
+                            response, "headers", {}
+                        ).get("Retry-After"):
+                            raise
+                        self._log(
+                            "HTTP archive request failed; trying the signed-in browser."
+                        )
+                    else:
+                        if links:
+                            return links
+                        self._log(
+                            "HTTP archive page contained no issue links; "
+                            "checking in the browser before ending the scan."
+                        )
+                else:
+                    self._log(
+                        "Retrying the blocked archive in the signed-in browser."
+                    )
+                use_browser = False
+                return self._run_browser_command(
+                    lambda: self._get_browser_page_issue_links(
+                        url, archive_url, hint_prefix=hint_prefix,
+                    ),
+                    description="Archive page inspection",
+                )
+            except Exception as exc:
+                if isinstance(exc, ArchiveScanError) and not isinstance(
+                    exc, ArchiveAccessError
+                ):
+                    raise
+                response = getattr(exc, "response", None)
+                status = (
+                    403 if isinstance(exc, ArchiveAccessError)
+                    else getattr(response, "status_code", None)
+                )
+                if status == 404 or attempt == 2:
+                    raise
+                delay = ARCHIVE_BLOCK_RETRY_DELAY if status in (403, 429) else 2.0
+                wait = delay * (2 ** attempt) + random.uniform(0, 0.5)
+                retry_after = getattr(response, "headers", {}).get("Retry-After")
+                if retry_after:
+                    try:
+                        retry_seconds = int(retry_after)
+                    except (TypeError, ValueError):
+                        try:
+                            retry_seconds = (
+                                parsedate_to_datetime(retry_after).timestamp()
+                                - time.time()
+                            )
+                        except (TypeError, ValueError, OverflowError):
+                            retry_seconds = 0
+                    wait = max(wait, retry_seconds)
+                self._log(
+                    f"Archive request failed ({status or 'connection error'}); "
+                    f"retrying ({attempt + 1}/2) in {wait:.0f}s. "
+                    "You can stop the scan during this wait."
+                )
+                if not self._wait_for_archive_delay(wait):
+                    raise ArchiveScanError("Archive scan stopped by user.") from exc
+
+    def _get_browser_page_issue_links(self, url: str, archive_url: str,
+                                      hint_prefix: str | None = None) -> list[str]:
         from selenium.webdriver.support.ui import WebDriverWait
 
         self._navigate(url)
@@ -1911,11 +1984,9 @@ class MagazineDownloader:
             )
 
         if self._is_browser_blocked_page(self._driver):
-            return self._get_page_issue_links_via_http(
-                url,
-                archive_url,
-                hint_prefix=hint_prefix,
-            )
+            # This signal must not look like a dead ChromeDriver transport:
+            # access blocks need a cooldown, not a restart of healthy Chrome.
+            raise ArchiveAccessError("Trains.com blocked the browser archive page (403).")
 
         try:
             WebDriverWait(self._driver, 15).until(
@@ -1948,6 +2019,8 @@ class MagazineDownloader:
         all_links: list = []
         is_special_archive = "/special-issues/" in self._canonical_url(archive_url)
         for page_num in range(1, max_pages + 1):
+            if not self._wait_for_archive_delay(0):
+                break
             url = archive_url if page_num == 1 else f"{archive_url}page/{page_num}/"
             try:
                 page_links = self.get_page_issue_links(
@@ -1960,6 +2033,8 @@ class MagazineDownloader:
                 exc.partial_links = list(all_links)
                 raise
             except ArchiveScanError as exc:
+                if not self._wait_for_archive_delay(0):
+                    return all_links
                 exc.partial_links = list(dict.fromkeys(
                     [*all_links, *exc.partial_links]
                 ))
@@ -1996,7 +2071,10 @@ class MagazineDownloader:
                 break
             all_links.extend(new)
             self._log(f"  Page {page_num}: {len(new)} issues ({len(all_links)} total)")
-            time.sleep(1 + random.uniform(0, 0.5))
+            if not self._wait_for_archive_delay(
+                ARCHIVE_REQUEST_DELAY + random.uniform(0, 0.5)
+            ):
+                break
 
         return all_links
 
@@ -2358,6 +2436,7 @@ class DownloadWorker(QThread):
                 download_dir=self.base_dir,
                 headless=self.headless,
                 log_fn=self.signals.log.emit,
+                stop_requested=lambda: self._stop,
             )
 
             # -- Authentication ---------------------------------------------
@@ -2430,7 +2509,7 @@ class DownloadWorker(QThread):
                     links = list(reversed(links))
                 all_tasks.extend([(link, dest_dir, prefix, False, mag_name) for link in links])
 
-                if self.include_specials:
+                if self.include_specials and not self._stop:
                     specials_url = archive_url + "special-issues/"
                     special_dir  = os.path.join(dest_dir, "Special Issues")
                     self._log(f"  Checking special issues at {specials_url}…")
@@ -3108,6 +3187,7 @@ class MissingIssuesWorker(QThread):
                 download_dir=self.dest_dir,
                 headless=self.headless,
                 log_fn=self.signals.log.emit,
+                stop_requested=lambda: self._stop,
             )
 
             # Authentication
@@ -3160,6 +3240,10 @@ class MissingIssuesWorker(QThread):
                     f"Archive scan incomplete for {self.prefix}: {exc}; "
                     f"continuing with {len(links)} issue(s) found so far."
                 )
+            if self._stop:
+                self.outcome = OUTCOME_CANCELLED
+                self._log("Missing-issue archive scan stopped by user.")
+                return
             self._log(f"Found {len(links)} issues in archive. Matching against missing list…")
 
             # Match each URL to a (year, month) by parsing its slug

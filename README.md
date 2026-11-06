@@ -5,14 +5,14 @@
   <p>
     <a href="../../releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/gmoran1016/Trains.com-PDF-Downloader-Renamer?display_name=tag&style=for-the-badge&label=Latest%20release"></a>
   </p>
-  <p><a href="#download">Download for your platform</a> · <a href="#whats-new-in-v200">What’s new in v2.0.0</a> · <a href="#running-from-source">Build from source</a></p>
+  <p><a href="#download">Download for your platform</a> · <a href="#whats-new-in-v202">What’s new in v2.0.2</a> · <a href="#running-from-source">Build from source</a></p>
 </div>
 
 > **Upgrading from v1.x?** Install v2.0.0 once from the [latest GitHub release](../../releases/latest). Earlier versions do not include the updater; later signed releases can be installed from the app after you approve them.
 
 ## Contents
 
-[Download](#download) · [What’s new](#whats-new-in-v200) · [Updating](#updating) · [Supported magazines](#supported-magazines) · [Features](#features) · [Authentication](#authentication) · [PDF naming](#pdf-naming--organization) · [Build and test](#running-from-source)
+[Download](#download) · [What’s new](#whats-new-in-v202) · [Updating](#updating) · [Supported magazines](#supported-magazines) · [Features](#features) · [Authentication](#authentication) · [PDF naming](#pdf-naming--organization) · [Build and test](#running-from-source)
 
 ## Download
 
@@ -30,13 +30,13 @@ All files are also listed on the [Releases page](../../releases/latest). Downloa
 
 > **macOS:** On first launch, right-click the app and choose **Open** to bypass Gatekeeper.
 
-## What’s new in v2.0.0
+## What’s new in v2.0.2
 
-- **Built-in updater:** checks GitHub at startup or from Settings, shows release notes, and installs signed updates only after you approve them.
-- **More reliable downloads:** filenames and PDF metadata use issue details, and existing issues are recognized across supported destination layouts to prevent duplicate downloads on later runs.
-- **Safer install options:** Windows portable users get the portable executable and replacement instructions; existing v1.x users can install this version manually once.
+- **Lighter archive scans:** use authenticated HTML requests and keep Chrome available to recover failed or empty responses.
+- **Better recovery from temporary blocks:** longer retry waits respect the site's timing, and Stop works throughout those waits.
+- **Reliable cancellation and saved login:** missing-issue jobs report cancellation correctly, and requests use refreshed browser cookies when available.
 
-See the [full v2.0.0 release notes](docs/releases/v2.0.0.md).
+See the [full v2.0.2 release notes](docs/releases/v2.0.2.md).
 
 ## Updating
 
@@ -67,8 +67,8 @@ Release signing and rollout instructions are in [docs/UPDATES.md](docs/UPDATES.m
 - Handle the three magazine download modes: direct PDF links for recent issues, embedded flipbook downloads for mid-era issues, and graceful skips for digitised-only issues.
 - Download up to three recent issues in parallel; progress is saved so later runs can resume and skip completed issues.
 - Scan the paginated [Model Railroader Track Plan Database](https://www.trains.com/mrr/how-to/track-plan-database/) and save plans under their original filenames in a separate folder. Existing downloads are skipped.
-- Reuse one signed-in browser session for magazines and track plans. If ChromeDriver hits Trains.com’s anti-bot 403 page, authenticated cookies can be used for archive discovery and direct PDF downloads.
-- Retry temporary archive failures and report blocked or interrupted scans as failures, preserving issues already found.
+- Reuse one signed-in browser session for magazines and track plans. Archive discovery uses authenticated HTML requests to avoid loading images, scripts, and embedded frames for every archive page; Chrome remains available as a fallback.
+- Pace archive requests and retry temporary access blocks after a longer cooldown, respecting the site's retry instructions. Stop remains available during the wait. Incomplete scans are reported as failures, preserving issues already found.
 - Remember magazine and track plan folders, cookie path, headless mode, sort order, and magazine selections. Choose newest-first or oldest-first; use test mode to scan only the first three archive pages.
 
 ### Organize PDFs
